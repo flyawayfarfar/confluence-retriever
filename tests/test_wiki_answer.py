@@ -10,6 +10,31 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 import wiki_answer as wiki  # noqa: E402
 
 
+# ── Config loader ─────────────────────────────────────────────────────────────
+
+class TestLoadConfig:
+    def test_prefers_user_config_path(self, tmp_path, monkeypatch):
+        user_env = tmp_path / "user.env"
+        project_env = tmp_path / "project.env"
+        user_env.write_text("CONFLUENCE_URL=https://user.example.com\nCONFLUENCE_PAT=user-pat\n")
+        project_env.write_text("CONFLUENCE_URL=https://project.example.com\nCONFLUENCE_PAT=project-pat\n")
+
+        monkeypatch.setattr(wiki, "USER_ENV_FILE", user_env)
+        monkeypatch.setattr(wiki, "PROJECT_ENV_FILE", project_env)
+
+        assert wiki.load_config() == ("user-pat", "https://user.example.com")
+
+    def test_falls_back_to_project_config_path(self, tmp_path, monkeypatch):
+        user_env = tmp_path / "missing.env"
+        project_env = tmp_path / "project.env"
+        project_env.write_text("CONFLUENCE_URL=https://project.example.com/\nCONFLUENCE_PAT=project-pat\n")
+
+        monkeypatch.setattr(wiki, "USER_ENV_FILE", user_env)
+        monkeypatch.setattr(wiki, "PROJECT_ENV_FILE", project_env)
+
+        assert wiki.load_config() == ("project-pat", "https://project.example.com")
+
+
 # ── CQL builder ───────────────────────────────────────────────────────────────
 
 class TestCqlEscape:
@@ -28,19 +53,20 @@ class TestCqlEscape:
 
 class TestBuildCql:
     def test_single_query(self):
-        assert wiki.build_cql(["auth"], None) == 'text ~ "auth"'
+        assert wiki.build_cql(["auth"], None) == 'text ~ "auth" AND type = "page"'
 
     def test_multiple_queries_or(self):
         result = wiki.build_cql(["auth", "login"], None)
-        assert result == '(text ~ "auth" OR text ~ "login")'
+        assert result == '(text ~ "auth" OR text ~ "login") AND type = "page"'
 
     def test_space_filter_appended(self):
         result = wiki.build_cql(["auth"], "MT")
-        assert result == 'text ~ "auth" AND space = "MT"'
+        assert result == 'text ~ "auth" AND type = "page" AND space = "MT"'
 
     def test_space_and_multiple_queries(self):
         result = wiki.build_cql(["auth", "sso"], "IIT")
         assert '(text ~ "auth" OR text ~ "sso")' in result
+        assert 'AND type = "page"' in result
         assert 'AND space = "IIT"' in result
 
 
@@ -85,6 +111,20 @@ class TestExtractHeadings:
 
 # ── Ranker ────────────────────────────────────────────────────────────────────
 
+class TestQueryTokens:
+    def test_splits_phrases_into_unique_tokens(self):
+        assert wiki.query_tokens(["customer API auth", "auth flow"]) == ["customer", "api", "auth", "flow"]
+
+    def test_ignores_short_tokens(self):
+        assert wiki.query_tokens(["an API in MT"]) == ["api"]
+
+    def test_short_acronym_does_not_match_inside_word(self):
+        assert not wiki.token_in_text("api", "capital planning")
+
+    def test_longer_token_can_match_word_variant(self):
+        assert wiki.token_in_text("auth", "authentication guide")
+
+
 def _make_result(title="", excerpt="", space_key="XX") -> dict:
     return {"id": "1", "title": title, "excerpt": excerpt,
             "space_key": space_key, "space_name": "Test Space",
@@ -92,13 +132,17 @@ def _make_result(title="", excerpt="", space_key="XX") -> dict:
 
 
 class TestScoreResult:
-    def test_title_match_scores_2(self):
+    def test_title_phrase_match_scores_4_plus_token_bonus(self):
         r = _make_result(title="authentication guide")
-        assert wiki.score_result(r, ["authentication"], None) == 2
+        assert wiki.score_result(r, ["authentication"], None) == 6
 
-    def test_excerpt_match_scores_1(self):
+    def test_excerpt_phrase_match_scores_2_plus_token_bonus(self):
         r = _make_result(excerpt="how to authenticate users")
-        assert wiki.score_result(r, ["authenticate"], None) == 1
+        assert wiki.score_result(r, ["authenticate"], None) == 3
+
+    def test_token_match_scores_without_full_phrase(self):
+        r = _make_result(title="customer authentication", excerpt="API setup")
+        assert wiki.score_result(r, ["customer API auth"], None) == 5
 
     def test_space_match_scores_1(self):
         r = _make_result(space_key="MT")
@@ -110,7 +154,7 @@ class TestScoreResult:
 
     def test_case_insensitive(self):
         r = _make_result(title="Authentication Guide")
-        assert wiki.score_result(r, ["authentication"], None) == 2
+        assert wiki.score_result(r, ["authentication"], None) == 6
 
 
 class TestRankResults:
@@ -128,6 +172,28 @@ class TestRankResults:
         b = _make_result(title="b page")
         ranked = wiki.rank_results([a, b], ["something else"], None)
         assert [r["title"] for r in ranked] == ["a page", "b page"]
+
+
+# ── Retrieval depth ───────────────────────────────────────────────────────────
+
+class TestResolveBodyOptions:
+    def test_links_depth_fetches_no_bodies(self):
+        assert wiki.resolve_body_options("links", False, None, None) == (0, 0)
+
+    def test_skim_depth_fetches_one_default_body(self):
+        assert wiki.resolve_body_options("skim", False, None, None) == (1, wiki.DEFAULT_BODY_CHARS)
+
+    def test_deep_depth_fetches_three_larger_bodies(self):
+        assert wiki.resolve_body_options("deep", False, None, None) == (3, 2000)
+
+    def test_include_body_aliases_skim_for_backwards_compatibility(self):
+        assert wiki.resolve_body_options("links", True, None, None) == (1, wiki.DEFAULT_BODY_CHARS)
+
+    def test_explicit_body_options_override_depth_defaults(self):
+        assert wiki.resolve_body_options("deep", False, 2, 500) == (2, 500)
+
+    def test_negative_body_options_are_clamped_to_zero(self):
+        assert wiki.resolve_body_options("skim", False, -1, -10) == (0, 0)
 
 
 # ── Confluence adapter ────────────────────────────────────────────────────────
@@ -193,6 +259,14 @@ class TestConfluenceAdapterSearch:
         resp_mock.add(resp_mock.GET, SEARCH_URL, json={"results": []}, status=200)
         adapter = wiki.ConfluenceAdapter("test-pat", BASE_URL)
         assert adapter.search(["q"], None, 5) == []
+
+    @resp_mock.activate
+    def test_exits_on_http_error_without_traceback(self):
+        resp_mock.add(resp_mock.GET, SEARCH_URL, status=429)
+        adapter = wiki.ConfluenceAdapter("test-pat", BASE_URL)
+        with pytest.raises(SystemExit) as exc:
+            adapter.search(["q"], None, 5)
+        assert exc.value.code == wiki.EXIT_NETWORK
 
 
 class TestConfluenceAdapterGetPage:

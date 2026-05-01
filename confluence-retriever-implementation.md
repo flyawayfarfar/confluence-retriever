@@ -39,7 +39,9 @@ confluence-retriever/
 
 ## Authentication
 
-Config file: `.env` in the project root (gitignored).
+Config file lookup order:
+1. `~/.config/confluence-retriever/.env`
+2. `.env` in the project root (gitignored)
 
 See `confluence-pat-setup.md` for setup steps.
 
@@ -56,7 +58,7 @@ The CLI reads both at startup via `python-dotenv`. Missing either causes exit co
 **Script:** `scripts/wiki_answer.py`
 
 ```bash
-python3 scripts/wiki_answer.py --query "TERM" [--query "TERM2"] [--space KEY] [--limit N]
+python3 scripts/wiki_answer.py --query "TERM" [--query "TERM2"] [--space KEY] [--limit N] [--depth links|skim|deep]
 ```
 
 | Flag | Default | Purpose |
@@ -64,6 +66,12 @@ python3 scripts/wiki_answer.py --query "TERM" [--query "TERM2"] [--space KEY] [-
 | `--query TEXT` | required | Search term (repeat for OR) |
 | `--space KEY` | none | Filter to a space key |
 | `--limit N` | 5 | Max results |
+| `--depth links` | `links` | Title, URL, and excerpt only |
+| `--depth skim` | `links` | Fetch one capped body snippet from the top ranked page |
+| `--depth deep` | `links` | Fetch larger snippets from the top three ranked pages |
+| `--include-body` | off | Compatibility alias for `--depth skim` |
+| `--body-top N` | by depth | Override number of pages to fetch bodies for |
+| `--body-chars N` | by depth | Override max body snippet characters per page |
 
 **Exit codes:**
 
@@ -83,12 +91,12 @@ argparse, PAT/URL loader, exit codes, basic structure.
 
 ### Phase 2 — Confluence Adapter ✓
 - `ConfluenceAdapter.search()` — CQL search, response normalisation
-- `ConfluenceAdapter.get_page()` — page body fetch (for future use)
-- `build_cql()` — CQL builder with escaping
+- `ConfluenceAdapter.get_page()` — optional page body fetch for `--depth skim` / `--depth deep`
+- `build_cql()` — CQL builder with escaping and `type = "page"` filtering
 - `strip_highlight_markers()` — removes `@@@hl@@@` / `@@@endhl@@@` markers from excerpts
 
 ### Phase 3 — Ranking ✓
-- `score_result()` — title match +2, excerpt match +1, space match +1
+- `score_result()` — phrase and token matching; title matches score higher than excerpt matches
 - `rank_results()` — stable sort by descending score
 
 ### Phase 4 — HTML Extraction ✓
@@ -107,7 +115,7 @@ Ranked markdown, one block per result:
 ```
 
 ### Phase 6 — Test Suite ✓
-32 unit tests in `tests/test_wiki_answer.py`. No real API calls — HTTP mocked with the `responses` library.
+46 unit tests in `tests/test_wiki_answer.py`. No real API calls — HTTP mocked with the `responses` library.
 
 Test classes: `TestCqlEscape`, `TestBuildCql`, `TestStripHighlightMarkers`, `TestHtmlToText`, `TestExtractHeadings`, `TestScoreResult`, `TestRankResults`, `TestConfluenceAdapterSearch`, `TestConfluenceAdapterGetPage`.
 
@@ -136,37 +144,36 @@ pip install -r requirements.txt
 
 ---
 
-## Future Features
+## Retrieval Depth
 
-### Iterative Retrieval (not yet implemented)
+### Optional Body Retrieval
 
-Currently the CLI does a single search call and returns ranked excerpts. A richer pattern — inspired by Andrej Karpathy's llm-wiki approach — would add a second retrieval pass:
+By default, the CLI does a single search call and returns ranked excerpts. Retrieval depth is explicit so assistants can control token cost from the user prompt:
+
+| Depth | API behavior | Token profile |
+|-------|--------------|---------------|
+| `links` | Search only; title, URL, excerpt | Lowest |
+| `skim` | Search plus top 1 page body snippet | Moderate |
+| `deep` | Search plus top 3 larger body snippets | Highest |
+
+Body retrieval performs a bounded skim pass:
 
 1. **Search pass** — run CQL search, get ranked excerpt list (current behaviour)
-2. **Skim pass** — for the top N results, fetch the full page body (`get_page()` is already implemented)
-3. **Re-rank or re-query** — if the body reveals the user's question is not answered by the top result, extract headings/keywords and issue a second targeted search
+2. **Skim pass** — for the top N ranked results, fetch page body snippets with `--body-top N`
+3. **Synthesis** — host AI uses headings and capped body text to answer without dumping whole pages
 
-When to do the second pass:
-- Excerpt confidence is low (no query term in any excerpt)
-- User question requires a specific procedure (steps, commands) that excerpts don't contain
-- Top result's headings suggest the answer is in a child page
+Prompt mapping for assistant skills:
+- `links`: "find", "search", "where is", "link to", "docs for", "quick answer", "just the link"
+- `skim`: "how do I", "show steps", "read the page", "according to the docs", "setup", "configure", "troubleshoot", "API usage"
+- `deep`: "deep search", "verify", "compare pages", "source of truth", "exact wording", "think harder", "ultrathink", "be thorough"
 
-The `get_page()` method and `html_to_text()` / `extract_headings()` helpers are already in place to support this. The main cost is latency (one extra API call per page fetched) and token cost (page body is 500–2000 chars of text vs 150-char excerpt).
+The main cost is latency (one extra API call per page fetched) and token cost. Defaults are no body text for `links`, 1 page at 1200 body characters for `skim`, and 3 pages at 2000 body characters each for `deep`. `--include-body` remains as a backwards-compatible alias for `--depth skim`.
 
-**Implementation sketch:**
-```python
-results = adapter.search(queries, space, limit=5)
-ranked = rank_results(results, queries, space)
-
-top = ranked[0]
-if needs_deep_read(top, queries):          # heuristic: low excerpt score
-    page = adapter.get_page(top["id"])
-    body_text = html_to_text(page["body_html"], max_chars=1500)
-    headings = extract_headings(page["body_html"])
-    # include body_text in output for the host AI to synthesise from
+```bash
+python3 scripts/wiki_answer.py --query "release process" --depth skim
 ```
 
-This keeps the dumb-retriever contract — the CLI still returns text, the host AI still synthesises — but gives the model richer signal when excerpts are insufficient.
+This keeps the dumb-retriever contract — the CLI still returns text, the host AI still synthesises — while giving the model richer signal only when needed.
 
 ### Precision Fixtures
 

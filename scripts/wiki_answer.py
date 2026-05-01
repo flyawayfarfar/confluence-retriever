@@ -2,19 +2,25 @@
 """Confluence wiki retrieval CLI — queries Confluence and returns ranked results."""
 
 import argparse
+import re
 import sys
 from pathlib import Path
 from typing import Optional
-
-import re
 
 import requests
 from bs4 import BeautifulSoup
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-ENV_FILE = Path(__file__).parent.parent / ".env"
+PROJECT_ENV_FILE = Path(__file__).parent.parent / ".env"
+USER_ENV_FILE = Path.home() / ".config" / "confluence-retriever" / ".env"
 TIMEOUT_SECONDS = 10
+DEFAULT_BODY_CHARS = 1200
+DEPTH_BODY_DEFAULTS = {
+    "links": (0, 0),
+    "skim": (1, DEFAULT_BODY_CHARS),
+    "deep": (3, 2000),
+}
 
 EXIT_OK = 0
 EXIT_CONFIG = 2
@@ -24,23 +30,26 @@ EXIT_NETWORK = 4
 # ── PAT loader ────────────────────────────────────────────────────────────────
 
 def load_config() -> tuple[str, str]:
-    """Load CONFLUENCE_PAT and CONFLUENCE_URL from ENV_FILE. Returns (pat, base_url)."""
-    if not ENV_FILE.exists():
-        print(f"ERROR: Config file not found: {ENV_FILE}", file=sys.stderr)
-        print(f"Copy .env.example to {ENV_FILE} and fill in CONFLUENCE_PAT", file=sys.stderr)
+    """Load CONFLUENCE_PAT and CONFLUENCE_URL. Returns (pat, base_url)."""
+    env_file = USER_ENV_FILE if USER_ENV_FILE.exists() else PROJECT_ENV_FILE
+    if not env_file.exists():
+        print("ERROR: Config file not found.", file=sys.stderr)
+        print(f"Checked: {USER_ENV_FILE}", file=sys.stderr)
+        print(f"Checked: {PROJECT_ENV_FILE}", file=sys.stderr)
+        print("Copy .env.example to one of those paths and fill in CONFLUENCE_PAT.", file=sys.stderr)
         sys.exit(EXIT_CONFIG)
 
     from dotenv import dotenv_values
-    config = dotenv_values(ENV_FILE)
+    config = dotenv_values(env_file)
     pat = config.get("CONFLUENCE_PAT", "").strip()
 
     if not pat:
-        print(f"ERROR: CONFLUENCE_PAT is not set in {ENV_FILE}", file=sys.stderr)
+        print(f"ERROR: CONFLUENCE_PAT is not set in {env_file}", file=sys.stderr)
         sys.exit(EXIT_CONFIG)
 
     base_url = config.get("CONFLUENCE_URL", "").rstrip("/")
     if not base_url:
-        print(f"ERROR: CONFLUENCE_URL is not set in {ENV_FILE}", file=sys.stderr)
+        print(f"ERROR: CONFLUENCE_URL is not set in {env_file}", file=sys.stderr)
         sys.exit(EXIT_CONFIG)
     return pat, base_url
 
@@ -63,6 +72,8 @@ def build_cql(queries: list[str], space: Optional[str]) -> str:
         cql = terms[0]
     else:
         cql = "(" + " OR ".join(terms) + ")"
+
+    cql += ' AND type = "page"'
 
     if space:
         cql += f' AND space = "{cql_escape(space)}"'
@@ -91,6 +102,26 @@ def extract_headings(html: str) -> list[str]:
     """Return h1–h3 heading texts from a Confluence page body."""
     soup = BeautifulSoup(html, "html.parser")
     return [tag.get_text(strip=True) for tag in soup.find_all(["h1", "h2", "h3"])]
+
+
+def query_tokens(queries: list[str]) -> list[str]:
+    """Return unique searchable tokens from query phrases."""
+    tokens: list[str] = []
+    seen = set()
+    for query in queries:
+        for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9_-]*", query.lower()):
+            if len(token) < 3 or token in seen:
+                continue
+            seen.add(token)
+            tokens.append(token)
+    return tokens
+
+
+def token_in_text(token: str, text: str) -> bool:
+    """Return whether a token appears in text without overmatching short acronyms."""
+    if len(token) <= 3:
+        return re.search(rf"(?<![A-Za-z0-9]){re.escape(token)}(?![A-Za-z0-9])", text) is not None
+    return token in text
 
 
 # ── Confluence adapter ────────────────────────────────────────────────────────
@@ -125,10 +156,14 @@ class ConfluenceAdapter:
             sys.exit(EXIT_NETWORK)
 
         if response.status_code in (401, 403):
-            print(f"ERROR: Auth failed ({response.status_code}). Check CONFLUENCE_PAT in {ENV_FILE}", file=sys.stderr)
+            print(f"ERROR: Auth failed ({response.status_code}). Check your CONFLUENCE_PAT.", file=sys.stderr)
             sys.exit(EXIT_AUTH)
 
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except requests.exceptions.HTTPError:
+            print(f"ERROR: Confluence returned HTTP {response.status_code}", file=sys.stderr)
+            sys.exit(EXIT_NETWORK)
         data = response.json()
 
         results = []
@@ -182,8 +217,14 @@ def score_result(result: dict, queries: list[str], space: Optional[str]) -> int:
     for q in queries:
         q_lower = q.lower()
         if q_lower in title_lower:
-            score += 2
+            score += 4
         if q_lower in excerpt_lower:
+            score += 2
+
+    for token in query_tokens(queries):
+        if token_in_text(token, title_lower):
+            score += 2
+        if token_in_text(token, excerpt_lower):
             score += 1
 
     if space and result["space_key"].upper() == space.upper():
@@ -197,6 +238,20 @@ def rank_results(results: list[dict], queries: list[str], space: Optional[str]) 
     scored = [(score_result(r, queries, space), r) for r in results]
     scored.sort(key=lambda x: x[0], reverse=True)
     return [r for _, r in scored]
+
+
+def resolve_body_options(
+    depth: str,
+    include_body: bool,
+    body_top: Optional[int],
+    body_chars: Optional[int],
+) -> tuple[int, int]:
+    """Return the number of page bodies to fetch and characters per body."""
+    effective_depth = "skim" if include_body and depth == "links" else depth
+    default_top, default_chars = DEPTH_BODY_DEFAULTS[effective_depth]
+    resolved_top = default_top if body_top is None else body_top
+    resolved_chars = default_chars if body_chars is None else body_chars
+    return max(0, resolved_top), max(0, resolved_chars)
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -218,6 +273,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--limit", type=int, default=5, metavar="N",
         help="Maximum number of results (default: 5)",
     )
+    parser.add_argument(
+        "--depth", choices=("links", "skim", "deep"), default="links",
+        help="Retrieval depth: links=title/URL/excerpt only, skim=top 1 body snippet, deep=top 3 larger snippets (default: links)",
+    )
+    parser.add_argument(
+        "--include-body", action="store_true",
+        help="Alias for --depth skim. Kept for compatibility.",
+    )
+    parser.add_argument(
+        "--body-top", type=int, default=None, metavar="N",
+        help="Override the number of top ranked pages to fetch bodies for",
+    )
+    parser.add_argument(
+        "--body-chars", type=int, default=None, metavar="N",
+        help="Override maximum body snippet characters per page",
+    )
     return parser
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -237,12 +308,29 @@ def main() -> None:
         sys.exit(EXIT_OK)
 
     print(f"# Wiki results for {', '.join(repr(q) for q in args.query)}\n")
+    body_by_id = {}
+    body_top, body_chars = resolve_body_options(args.depth, args.include_body, args.body_top, args.body_chars)
+    if body_top and body_chars:
+        for result in ranked[:body_top]:
+            page = adapter.get_page(result["id"])
+            if page and page["body_html"]:
+                body_by_id[result["id"]] = {
+                    "headings": extract_headings(page["body_html"])[:8],
+                    "body": html_to_text(page["body_html"], max_chars=body_chars),
+                }
+
     for i, r in enumerate(ranked, 1):
         print(f"## {i}. {r['title']}")
         print(f"- **Space:** {r['space_name']} (`{r['space_key']}`)")
         print(f"- **URL:** {r['url']}")
         if r["excerpt"]:
             print(f"- **Excerpt:** {r['excerpt'][:200]}")
+        body = body_by_id.get(r["id"])
+        if body:
+            if body["headings"]:
+                print(f"- **Headings:** {', '.join(body['headings'])}")
+            if body["body"]:
+                print(f"- **Body snippet:** {body['body']}")
         print()
 
     sys.exit(EXIT_OK)

@@ -26,7 +26,7 @@ pip install -r requirements.txt
 
 ### 2. Configure credentials
 
-Copy the template and fill it in:
+Copy the template and fill it in. The CLI checks `~/.config/confluence-retriever/.env` first, then falls back to `.env` in this repository:
 
 ```bash
 cp .env.example ~/.config/confluence-retriever/.env
@@ -46,22 +46,35 @@ For how to generate a PAT, see [confluence-pat-setup.md](confluence-pat-setup.md
 
 ### 3. Install the AI skill (optional)
 
-This ships a `search-wiki` skill that tells your AI assistant how to invoke the CLI. Run once per machine:
+This ships a `search-wiki` skill that tells your AI assistant how to invoke the CLI. Install it once per assistant:
 
 ```bash
-# Works on Windows, macOS, Linux
-python install.py
+# Claude Code, writes to ~/.claude/skills/search-wiki/SKILL.md
+python3 install.py --target claude
+
+# Codex, writes to $CODEX_HOME/skills/search-wiki/SKILL.md or ~/.codex/skills/search-wiki/SKILL.md
+python3 install.py --target codex
+
+# Custom/global skill path, for example a Claude Code global directory
+python3 install.py --dest /mnt/c/dev/github/claude/global/skills/search-wiki/SKILL.md
 ```
 
-This stamps the absolute path to `wiki_answer.py` into `~/.claude/skills/search-wiki/SKILL.md`. After that, Claude Code (and compatible assistants) will automatically invoke the CLI when you ask internal wiki questions.
+`python3 install.py` defaults to Claude Code. The installer stamps the absolute path to `wiki_answer.py` into the skill file. After that, the configured assistant can invoke the CLI when you ask internal wiki questions.
 
 ## Usage
 
 Run directly:
 
 ```bash
+# Basic search: one Confluence search request, compact title/URL/excerpt output
 python3 scripts/wiki_answer.py --query "deployment process" --limit 5
 python3 scripts/wiki_answer.py --query "authentication" --query "API" --space MT
+
+# Detail search: also fetch a capped body snippet from the top ranked page
+python3 scripts/wiki_answer.py --query "release checklist" --depth skim
+
+# Deeper search: fetch larger snippets from the top three ranked pages
+python3 scripts/wiki_answer.py --query "release approvals" --depth deep
 ```
 
 Or let your AI assistant call it automatically after installing the skill.
@@ -73,6 +86,22 @@ Or let your AI assistant call it automatically after installing the skill.
 | `--query TEXT` | required | Search term (repeat for multiple) |
 | `--space KEY` | none | Filter to a Confluence space (e.g. `MT`, `IIT`) |
 | `--limit N` | 5 | Max results |
+| `--depth links` | `links` | Title, URL, and excerpt only; cheapest mode |
+| `--depth skim` | `links` | Fetch one capped body snippet from the top ranked page |
+| `--depth deep` | `links` | Fetch larger snippets from the top three ranked pages |
+| `--include-body` | off | Compatibility alias for `--depth skim` |
+| `--body-top N` | by depth | Override number of top ranked pages to fetch bodies for |
+| `--body-chars N` | by depth | Override max body snippet characters per fetched page |
+
+By default, the CLI performs one search request and returns compact title, URL, and excerpt results. Use `--depth skim` when the user needs details likely absent from snippets, such as process steps, troubleshooting, or API usage. Use `--depth deep` only for explicit requests to verify, compare, or inspect multiple pages. Defaults are `links` = no body text, `skim` = 1 page at 1200 characters, and `deep` = 3 pages at 2000 characters each.
+
+Assistant skills should map user phrasing to depth:
+
+| User phrasing | Suggested depth |
+|---------------|-----------------|
+| "find", "where is", "link to", "docs for", "just the link" | `links` |
+| "how do I", "show steps", "read the page", "according to the docs", "troubleshoot" | `skim` |
+| "deep search", "verify", "compare pages", "source of truth", "exact wording", "think harder" | `deep` |
 
 ## Platform support
 
