@@ -52,6 +52,12 @@ This ships a `search-wiki` skill that tells your AI assistant how to invoke the 
 # Claude Code, writes to ~/.claude/skills/search-wiki/SKILL.md
 python3 install.py --target claude
 
+# Gemini CLI, writes to ~/.gemini/skills/search-wiki/SKILL.md
+python3 install.py --target gemini
+
+# GitHub Copilot CLI, writes to ~/.config/github-copilot/skills/search-wiki/SKILL.md (Unix) or %APPDATA%\GitHub Copilot\skills\search-wiki\SKILL.md (Windows)
+python3 install.py --target copilot
+
 # Codex, writes to $CODEX_HOME/skills/search-wiki/SKILL.md or ~/.codex/skills/search-wiki/SKILL.md
 python3 install.py --target codex
 
@@ -60,6 +66,8 @@ python3 install.py --dest /mnt/c/dev/github/claude/global/skills/search-wiki/SKI
 ```
 
 `python3 install.py` defaults to Claude Code. The installer stamps the absolute path to `wiki_answer.py` into the skill file. After that, the configured assistant can invoke the CLI when you ask internal wiki questions.
+
+For detailed GitHub Copilot CLI setup instructions, see [COPILOT_CLI_SETUP.md](COPILOT_CLI_SETUP.md).
 
 ## Usage
 

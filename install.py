@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Install the search-wiki skill for Claude Code or Codex.
+"""Install the search-wiki skill for Claude Code, Codex, Gemini, or GitHub Copilot CLI.
 
 Works on Windows, macOS, and Linux — no shell required.
 
 Usage:
-    python install.py                  # install for Claude Code
-    python install.py --target codex   # install for Codex
+    python install.py                      # install for Claude Code
+    python install.py --target codex       # install for Codex
+    python install.py --target gemini      # install for Gemini
+    python install.py --target copilot     # install for GitHub Copilot CLI
     python install.py --dest /path/to/search-wiki/SKILL.md
-    python install.py --check          # dry-run: print what would be written
+    python install.py --check              # dry-run: print what would be written
 """
 
 import argparse
@@ -23,6 +25,14 @@ def skill_dest(target: str) -> Path:
     if target == "codex":
         codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
         return codex_home / "skills" / "search-wiki" / "SKILL.md"
+    if target == "gemini":
+        return Path.home() / ".gemini" / "skills" / "search-wiki" / "SKILL.md"
+    if target == "copilot":
+        if sys.platform == "win32":
+            appdata = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+            return appdata / "GitHub Copilot" / "skills" / "search-wiki" / "SKILL.md"
+        else:
+            return Path.home() / ".config" / "github-copilot" / "skills" / "search-wiki" / "SKILL.md"
     return Path.home() / ".claude" / "skills" / "search-wiki" / "SKILL.md"
 
 
@@ -30,7 +40,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--target",
-        choices=("claude", "codex"),
+        choices=("claude", "codex", "gemini", "copilot"),
         default="claude",
         help="Assistant skill directory to install into (default: claude)",
     )
