@@ -16,6 +16,8 @@ PROJECT_ENV_FILE = Path(__file__).parent.parent / ".env"
 USER_ENV_FILE = Path.home() / ".config" / "confluence-retriever" / ".env"
 TIMEOUT_SECONDS = 10
 DEFAULT_BODY_CHARS = 1200
+DEFAULT_PASSAGE_CHARS = 450
+MAX_PASSAGES_PER_PAGE = 4
 DEPTH_BODY_DEFAULTS = {
     "links": (0, 0),
     "skim": (1, DEFAULT_BODY_CHARS),
@@ -102,6 +104,118 @@ def extract_headings(html: str) -> list[str]:
     """Return h1–h3 heading texts from a Confluence page body."""
     soup = BeautifulSoup(html, "html.parser")
     return [tag.get_text(strip=True) for tag in soup.find_all(["h1", "h2", "h3"])]
+
+
+def normalize_text(text: str) -> str:
+    """Collapse whitespace in extracted text."""
+    return re.sub(r"\s{2,}", " ", text).strip()
+
+
+def truncate_text(text: str, max_chars: int) -> str:
+    """Truncate text at a word boundary when practical."""
+    if len(text) <= max_chars:
+        return text
+    if max_chars <= 3:
+        return text[:max_chars]
+    text_limit = max_chars - 3
+    truncated = text[:text_limit].rstrip()
+    boundary = truncated.rfind(" ")
+    if boundary >= text_limit * 0.7:
+        truncated = truncated[:boundary]
+    return f"{truncated}..."
+
+
+def extract_text_blocks(html: str) -> list[dict]:
+    """Extract readable text blocks with their nearest preceding h1–h3 heading."""
+    soup = BeautifulSoup(html, "html.parser")
+    heading_tags = {"h1", "h2", "h3"}
+    block_tags = {"p", "li", "pre", "blockquote", "td", "th"}
+    current_heading = ""
+    blocks: list[dict] = []
+
+    for tag in soup.find_all(list(heading_tags | block_tags)):
+        text = normalize_text(tag.get_text(separator=" ", strip=True))
+        if not text:
+            continue
+
+        if tag.name in heading_tags:
+            current_heading = text
+            continue
+
+        if tag.name in {"td", "th"} and tag.find(list(block_tags - {"td", "th"})):
+            continue
+
+        blocks.append({"heading": current_heading, "text": text})
+
+    return blocks
+
+
+def score_text_block(block: dict, queries: list[str]) -> int:
+    """Score a page text block for query relevance."""
+    score = 0
+    text_lower = block["text"].lower()
+    heading_lower = block["heading"].lower()
+
+    for query in queries:
+        query_lower = query.lower()
+        if query_lower in heading_lower:
+            score += 5
+        if query_lower in text_lower:
+            score += 4
+
+    for token in query_tokens(queries):
+        if token_in_text(token, heading_lower):
+            score += 2
+        if token_in_text(token, text_lower):
+            score += 1
+
+    return score
+
+
+def extract_relevant_passages(
+    html: str,
+    queries: list[str],
+    max_chars: int,
+    max_passages: int = MAX_PASSAGES_PER_PAGE,
+    passage_chars: int = DEFAULT_PASSAGE_CHARS,
+) -> list[dict]:
+    """Return the most query-relevant page passages within a character budget."""
+    if max_chars <= 0 or max_passages <= 0:
+        return []
+
+    blocks = extract_text_blocks(html)
+    if not blocks:
+        fallback = html_to_text(html, max_chars=max_chars)
+        return [{"heading": "", "text": fallback}] if fallback else []
+
+    scored = [
+        (score_text_block(block, queries), index, block)
+        for index, block in enumerate(blocks)
+    ]
+    matching = [item for item in scored if item[0] > 0]
+
+    if matching:
+        candidates = sorted(matching, key=lambda item: (-item[0], item[1]))
+    else:
+        candidates = scored
+
+    selected: list[dict] = []
+    used_indexes: set[int] = set()
+    remaining_chars = max_chars
+
+    for _, index, block in candidates:
+        if index in used_indexes or len(selected) >= max_passages or remaining_chars <= 0:
+            continue
+
+        text = truncate_text(block["text"], min(passage_chars, remaining_chars))
+        if not text:
+            continue
+
+        selected.append({"heading": block["heading"], "text": text})
+        used_indexes.add(index)
+        remaining_chars -= len(text)
+
+    return selected
 
 
 def query_tokens(queries: list[str]) -> list[str]:
@@ -275,7 +389,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--depth", choices=("links", "skim", "deep"), default="links",
-        help="Retrieval depth: links=title/URL/excerpt only, skim=top 1 body snippet, deep=top 3 larger snippets (default: links)",
+        help="Retrieval depth: links=title/URL/excerpt only, skim=top 1 page passages, deep=top 3 page passages (default: links)",
     )
     parser.add_argument(
         "--include-body", action="store_true",
@@ -287,7 +401,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--body-chars", type=int, default=None, metavar="N",
-        help="Override maximum body snippet characters per page",
+        help="Override maximum relevant passage characters per page",
     )
     return parser
 
@@ -316,7 +430,11 @@ def main() -> None:
             if page and page["body_html"]:
                 body_by_id[result["id"]] = {
                     "headings": extract_headings(page["body_html"])[:8],
-                    "body": html_to_text(page["body_html"], max_chars=body_chars),
+                    "passages": extract_relevant_passages(
+                        page["body_html"],
+                        args.query,
+                        max_chars=body_chars,
+                    ),
                 }
 
     for i, r in enumerate(ranked, 1):
@@ -329,8 +447,11 @@ def main() -> None:
         if body:
             if body["headings"]:
                 print(f"- **Headings:** {', '.join(body['headings'])}")
-            if body["body"]:
-                print(f"- **Body snippet:** {body['body']}")
+            if body["passages"]:
+                print("- **Relevant passages:**")
+                for passage in body["passages"]:
+                    prefix = f"{passage['heading']}: " if passage["heading"] else ""
+                    print(f"  - {prefix}{passage['text']}")
         print()
 
     sys.exit(EXIT_OK)

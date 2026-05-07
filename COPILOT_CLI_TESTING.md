@@ -2,7 +2,9 @@
 
 ## Installation Status
 
-✅ **INSTALLED** at: `~/.config/github-copilot/skills/search-wiki/SKILL.md`
+✅ **INSTALLED** at: `~/.copilot/skills/search-wiki/SKILL.md`
+
+Also installable at the shared agent-standard path: `~/.agents/skills/search-wiki/SKILL.md`
 
 **Script location:** `/mnt/c/dev/github/confluence-retriever/scripts/wiki_answer.py`
 
@@ -248,7 +250,6 @@ copilot > /exit
 ## Resources
 
 - **Setup guide:** [COPILOT_CLI_SETUP.md](COPILOT_CLI_SETUP.md)
-- **Skill code:** `~/.config/github-copilot/skills/search-wiki/SKILL.md`
+- **Skill code:** `~/.copilot/skills/search-wiki/SKILL.md`
 - **CLI script:** `/mnt/c/dev/github/confluence-retriever/scripts/wiki_answer.py`
 - **Developer guide:** [.github/copilot-instructions.md](.github/copilot-instructions.md)
-

@@ -82,9 +82,15 @@ python3 install.py --target copilot
 **What this does:**
 - Reads the skill template from `skills/search-wiki.md`
 - Substitutes the absolute path to `scripts/wiki_answer.py` into the skill
-- Writes the configured skill to one of:
-  - **Linux/macOS:** `~/.config/github-copilot/skills/search-wiki/SKILL.md`
-  - **Windows:** `%APPDATA%\GitHub Copilot\skills\search-wiki\SKILL.md`
+- Writes the configured skill to `~/.copilot/skills/search-wiki/SKILL.md`
+
+For the shared agent-standard location, also run:
+
+```bash
+python3 install.py --target agents
+```
+
+This writes to `~/.agents/skills/search-wiki/SKILL.md`.
 
 **Verify installation:**
 
@@ -96,16 +102,17 @@ python3 install.py --target copilot --check
 python3 install.py --target copilot
 
 # Verify the file exists
-ls ~/.config/github-copilot/skills/search-wiki/SKILL.md        # Linux/macOS
-dir "%APPDATA%\GitHub Copilot\skills\search-wiki\SKILL.md"    # Windows PowerShell
+ls ~/.copilot/skills/search-wiki/SKILL.md
+ls ~/.agents/skills/search-wiki/SKILL.md
 ```
 
 ### Step 5: Test the Skill Integration
 
-Reload GitHub Copilot CLI and test the skill:
+Start a new GitHub Copilot CLI session, or reload skills inside an existing session:
 
-```bash
-copilot alias set search "search-wiki"
+```text
+/skills reload
+/skills info search-wiki
 ```
 
 Then use it:
@@ -211,11 +218,11 @@ This fetches larger snippets from the top 3 results, useful for comparison and v
 **Solution:**
 1. Verify the skill was installed:
    ```bash
-   ls ~/.config/github-copilot/skills/search-wiki/SKILL.md      # Linux/macOS
-   dir "%APPDATA%\GitHub Copilot\skills\search-wiki"           # Windows
+   ls ~/.copilot/skills/search-wiki/SKILL.md
+   ls ~/.agents/skills/search-wiki/SKILL.md
    ```
 2. If missing, re-run: `python3 install.py --target copilot`
-3. Restart GitHub Copilot CLI or reload: `copilot skill load`
+3. Restart GitHub Copilot CLI or run `/skills reload` in the active session.
 
 ### Exit Code 2: Config Error
 
@@ -286,7 +293,7 @@ This fetches larger snippets from the top 3 results, useful for comparison and v
    ```
 2. If the path is incorrect, use `--dest` to specify manually:
    ```bash
-   python3 install.py --dest ~/.config/github-copilot/skills/search-wiki/SKILL.md
+   python3 install.py --dest ~/.copilot/skills/search-wiki/SKILL.md
    ```
 
 ---
@@ -327,8 +334,8 @@ python3 /path/to/confluence-retriever/scripts/wiki_answer.py \
 To remove the skill:
 
 ```bash
-rm -rf ~/.config/github-copilot/skills/search-wiki        # Linux/macOS
-rmdir "%APPDATA%\GitHub Copilot\skills\search-wiki" /s    # Windows
+rm -rf ~/.copilot/skills/search-wiki
+rm -rf ~/.agents/skills/search-wiki
 ```
 
 ---

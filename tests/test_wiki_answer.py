@@ -109,6 +109,49 @@ class TestExtractHeadings:
         assert wiki.extract_headings("<p>Just a paragraph</p>") == []
 
 
+class TestExtractRelevantPassages:
+    def test_prefers_matching_passage_below_intro(self):
+        html = """
+        <h1>Release Process</h1>
+        <p>Intro text with ownership and general notes.</p>
+        <h2>Approval Steps</h2>
+        <p>Release approval requires product signoff and engineering review.</p>
+        """
+
+        passages = wiki.extract_relevant_passages(html, ["release approval"], max_chars=500)
+
+        assert passages[0] == {
+            "heading": "Approval Steps",
+            "text": "Release approval requires product signoff and engineering review.",
+        }
+
+    def test_falls_back_to_first_blocks_when_no_match(self):
+        html = "<h1>Guide</h1><p>First paragraph.</p><p>Second paragraph.</p>"
+
+        passages = wiki.extract_relevant_passages(html, ["missing"], max_chars=500, max_passages=2)
+
+        assert [p["text"] for p in passages] == ["First paragraph.", "Second paragraph."]
+
+    def test_respects_character_budget(self):
+        html = "<p>authentication " + ("details " * 100) + "</p>"
+
+        passages = wiki.extract_relevant_passages(
+            html,
+            ["authentication"],
+            max_chars=80,
+            passage_chars=80,
+        )
+
+        assert len(passages) == 1
+        assert len(passages[0]["text"]) <= 80
+        assert passages[0]["text"].endswith("...")
+
+    def test_returns_plain_text_fallback_for_unstructured_html(self):
+        passages = wiki.extract_relevant_passages("plain authentication text", ["authentication"], max_chars=100)
+
+        assert passages == [{"heading": "", "text": "plain authentication text"}]
+
+
 # ── Ranker ────────────────────────────────────────────────────────────────────
 
 class TestQueryTokens:

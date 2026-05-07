@@ -40,8 +40,8 @@ Default to `--depth links` unless the user's wording asks for more detail.
 | Depth | Use when the user says | Behavior |
 |-------|------------------------|----------|
 | `links` | "find", "search", "where is", "link to", "docs for", "page about", "quick answer", "just the link", "top result" | One search request; title, URL, and excerpt only |
-| `skim` | "how do I", "how does", "what are the steps", "show me the steps", "summarise the page", "read the page", "according to the docs", "explain", "details", "setup", "configure", "troubleshoot", "error", "API usage", "example command" | Fetch one capped body snippet from the top ranked page |
-| `deep` | "deep search", "look deeper", "verify", "double check", "cross-check", "compare pages", "check multiple pages", "source of truth", "exact wording", "policy wording", "think harder", "ultrathink", "be thorough", "investigate", "I need confidence", "don't just give the top result" | Fetch larger body snippets from the top three ranked pages |
+| `skim` | "how do I", "how does", "what are the steps", "show me the steps", "summarise the page", "read the page", "according to the docs", "explain", "details", "setup", "configure", "troubleshoot", "error", "API usage", "example command" | Fetch capped query-relevant passages from the top ranked page |
+| `deep` | "deep search", "look deeper", "verify", "double check", "cross-check", "compare pages", "check multiple pages", "source of truth", "exact wording", "policy wording", "think harder", "ultrathink", "be thorough", "investigate", "I need confidence", "don't just give the top result" | Fetch larger passage budgets from the top three ranked pages |
 
 Do not send trigger phrases such as "think harder" to Confluence as query text. Interpret them as depth instructions, then extract the actual wiki search terms separately.
 
@@ -85,11 +85,11 @@ Read the returned markdown and compose a direct answer:
 | `--space KEY` | none | Filter to a Confluence space (e.g. `MT`, `IIT`, `CDBE`) |
 | `--limit N` | 5 | Max results to retrieve |
 | `--depth links` | `links` | Title, URL, and excerpt only |
-| `--depth skim` | `links` | Fetch one capped body snippet from the top ranked page |
-| `--depth deep` | `links` | Fetch larger snippets from the top three ranked pages |
+| `--depth skim` | `links` | Fetch capped query-relevant passages from the top ranked page |
+| `--depth deep` | `links` | Fetch larger passage budgets from the top three ranked pages |
 | `--include-body` | off | Compatibility alias for `--depth skim` |
 | `--body-top N` | by depth | Override number of top ranked pages to fetch bodies for |
-| `--body-chars N` | by depth | Override max body snippet characters per fetched page |
+| `--body-chars N` | by depth | Override max passage characters per fetched page |
 
 ## Output Format
 
@@ -103,7 +103,8 @@ The CLI returns ranked markdown:
 - **URL:** https://your-instance/...
 - **Excerpt:** ...
 - **Headings:** ...
-- **Body snippet:** ...    # only with --depth skim/deep
+- **Relevant passages:**    # only with --depth skim/deep
+  - Heading: matching passage text...
 ```
 
 Higher-ranked results are more likely to contain the answer. Start from result 1. Avoid `--depth deep` unless the user explicitly asks to compare, verify, or inspect multiple pages.

@@ -67,11 +67,11 @@ python3 scripts/wiki_answer.py --query "TERM" [--query "TERM2"] [--space KEY] [-
 | `--space KEY` | none | Filter to a space key |
 | `--limit N` | 5 | Max results |
 | `--depth links` | `links` | Title, URL, and excerpt only |
-| `--depth skim` | `links` | Fetch one capped body snippet from the top ranked page |
-| `--depth deep` | `links` | Fetch larger snippets from the top three ranked pages |
+| `--depth skim` | `links` | Fetch capped query-relevant passages from the top ranked page |
+| `--depth deep` | `links` | Fetch larger passage budgets from the top three ranked pages |
 | `--include-body` | off | Compatibility alias for `--depth skim` |
 | `--body-top N` | by depth | Override number of pages to fetch bodies for |
-| `--body-chars N` | by depth | Override max body snippet characters per page |
+| `--body-chars N` | by depth | Override max passage characters per page |
 
 **Exit codes:**
 
@@ -102,6 +102,7 @@ argparse, PAT/URL loader, exit codes, basic structure.
 ### Phase 4 — HTML Extraction ✓
 - `html_to_text()` — BeautifulSoup tag stripping, whitespace collapse, truncation
 - `extract_headings()` — h1–h3 heading list from page HTML
+- `extract_relevant_passages()` — query-aware passage selection within the depth character budget
 
 ### Phase 5 — Output ✓
 Ranked markdown, one block per result:
@@ -115,7 +116,7 @@ Ranked markdown, one block per result:
 ```
 
 ### Phase 6 — Test Suite ✓
-46 unit tests in `tests/test_wiki_answer.py`. No real API calls — HTTP mocked with the `responses` library.
+50 unit tests in `tests/test_wiki_answer.py`. No real API calls — HTTP mocked with the `responses` library.
 
 Test classes: `TestCqlEscape`, `TestBuildCql`, `TestStripHighlightMarkers`, `TestHtmlToText`, `TestExtractHeadings`, `TestScoreResult`, `TestRankResults`, `TestConfluenceAdapterSearch`, `TestConfluenceAdapterGetPage`.
 
@@ -153,21 +154,22 @@ By default, the CLI does a single search call and returns ranked excerpts. Retri
 | Depth | API behavior | Token profile |
 |-------|--------------|---------------|
 | `links` | Search only; title, URL, excerpt | Lowest |
-| `skim` | Search plus top 1 page body snippet | Moderate |
-| `deep` | Search plus top 3 larger body snippets | Highest |
+| `skim` | Search plus top 1 page with capped relevant passages | Moderate |
+| `deep` | Search plus top 3 pages with larger passage budgets | Highest |
 
 Body retrieval performs a bounded skim pass:
 
 1. **Search pass** — run CQL search, get ranked excerpt list (current behaviour)
-2. **Skim pass** — for the top N ranked results, fetch page body snippets with `--body-top N`
-3. **Synthesis** — host AI uses headings and capped body text to answer without dumping whole pages
+2. **Skim pass** — for the top N ranked results, fetch page bodies with `--body-top N`
+3. **Passage selection** — score page text blocks against query phrases and tokens, then emit the best passages under `--body-chars`
+4. **Synthesis** — host AI uses headings and capped relevant passages to answer without dumping whole pages
 
 Prompt mapping for assistant skills:
 - `links`: "find", "search", "where is", "link to", "docs for", "quick answer", "just the link"
 - `skim`: "how do I", "show steps", "read the page", "according to the docs", "setup", "configure", "troubleshoot", "API usage"
 - `deep`: "deep search", "verify", "compare pages", "source of truth", "exact wording", "think harder", "ultrathink", "be thorough"
 
-The main cost is latency (one extra API call per page fetched) and token cost. Defaults are no body text for `links`, 1 page at 1200 body characters for `skim`, and 3 pages at 2000 body characters each for `deep`. `--include-body` remains as a backwards-compatible alias for `--depth skim`.
+The main cost is latency (one extra API call per page fetched) and token cost. Defaults are no body text for `links`, 1 page with up to 1200 relevant passage characters for `skim`, and 3 pages with up to 2000 relevant passage characters each for `deep`. `--include-body` remains as a backwards-compatible alias for `--depth skim`.
 
 ```bash
 python3 scripts/wiki_answer.py --query "release process" --depth skim

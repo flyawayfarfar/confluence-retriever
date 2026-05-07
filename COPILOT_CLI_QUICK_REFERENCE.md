@@ -4,7 +4,8 @@
 
 **Skill is installed and ready to use.**
 
-- **Location:** `~/.config/github-copilot/skills/search-wiki/SKILL.md`
+- **Location:** `~/.copilot/skills/search-wiki/SKILL.md`
+- **Shared agent location:** `~/.agents/skills/search-wiki/SKILL.md`
 - **Script:** `/mnt/c/dev/github/confluence-retriever/scripts/wiki_answer.py`
 - **GitHub Copilot CLI version:** 1.0.39
 - **Installed:** 2026-05-01
@@ -15,13 +16,13 @@
 
 ### 1. Is the skill installed?
 
-✅ **YES** — at `~/.config/github-copilot/skills/search-wiki/SKILL.md`
+✅ **YES** — at `~/.copilot/skills/search-wiki/SKILL.md`
 
 **Verify:**
 ```bash
 copilot
-> /env
-# Look for "Skills: search-wiki" in output
+> /skills reload
+> /skills info search-wiki
 ```
 
 ---

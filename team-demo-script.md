@@ -71,7 +71,7 @@ python3 scripts/wiki_answer.py \
 
 Talk track:
 
-"Phrases like 'how do I', 'steps', 'according to the docs', or 'troubleshoot' trigger `--depth skim`. It still searches first, then fetches a capped body snippet from only the top ranked page."
+"Phrases like 'how do I', 'steps', 'according to the docs', or 'troubleshoot' trigger `--depth skim`. It still searches first, then fetches capped query-relevant passages from only the top ranked page."
 
 ## Demo 3: Deeper Verification
 
@@ -93,15 +93,15 @@ python3 scripts/wiki_answer.py \
 
 Talk track:
 
-"For 'deep search', 'verify', 'compare pages', 'source of truth', 'exact wording', or 'think harder', the assistant uses `--depth deep`. That fetches larger snippets from the top three pages. It costs more tokens, so it is reserved for explicit user intent."
+"For 'deep search', 'verify', 'compare pages', 'source of truth', 'exact wording', or 'think harder', the assistant uses `--depth deep`. That fetches larger passage budgets from the top three pages. It costs more tokens, so it is reserved for explicit user intent."
 
 ## Depth Summary
 
 | Depth | Trigger examples | Behavior |
 |-------|------------------|----------|
 | `links` | find, where is, link to, docs for, just the link | Search only; title, URL, excerpt |
-| `skim` | how do I, show steps, read the page, troubleshoot | Fetch top 1 page snippet |
-| `deep` | deep search, verify, compare pages, source of truth, think harder | Fetch top 3 larger snippets |
+| `skim` | how do I, show steps, read the page, troubleshoot | Fetch top 1 page's relevant passages |
+| `deep` | deep search, verify, compare pages, source of truth, think harder | Fetch top 3 pages' relevant passages |
 
 ## Configuration
 

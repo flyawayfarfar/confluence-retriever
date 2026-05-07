@@ -52,7 +52,7 @@ Single-file CLI with these logical sections:
 1. **Config** — constants for file paths, timeouts, exit codes, depth defaults
 2. **Config Loader** (`load_config()`) — reads `.env` from `~/.config/confluence-retriever/.env` or `./.env`
 3. **CQL Builder** (`build_cql()`, `cql_escape()`) — constructs Confluence CQL queries with proper escaping
-4. **HTML Utilities** (`html_to_text()`, `extract_headings()`, `strip_highlight_markers()`) — parses and normalizes page body text
+4. **HTML Utilities** (`html_to_text()`, `extract_headings()`, `extract_relevant_passages()`, `strip_highlight_markers()`) — parses page bodies and selects query-relevant passages
 5. **Ranking** (`score_result()`, `rank_results()`) — scores results by keyword match (title matches score higher than excerpt matches)
 6. **Confluence Adapter** (`ConfluenceAdapter` class) — wraps HTTP calls to `/rest/api/content/search` and `/rest/api/content/{id}?expand=body.storage`
 7. **CLI** (`main()` with argparse) — wires everything together, handles exit codes
@@ -120,8 +120,8 @@ python3 scripts/wiki_answer.py --query "auth" --query "API" --space MT --limit 1
 | Mode | API calls | Body fetched | Use case |
 |------|-----------|-------------|----------|
 | `--depth links` (default) | 1 search | No | Quick finding — "where is the page?" |
-| `--depth skim` | 1 search + 1 body fetch | 1 page, capped 1200 chars | "How do I...?" steps and details |
-| `--depth deep` | 1 search + 3 body fetches | 3 pages, 2000 chars each | Deep verification, compare pages |
+| `--depth skim` | 1 search + 1 body fetch | 1 page, capped 1200 relevant passage chars | "How do I...?" steps and details |
+| `--depth deep` | 1 search + 3 body fetches | 3 pages, 2000 relevant passage chars each | Deep verification, compare pages |
 
 Override body fetch count and character limits:
 ```bash
@@ -139,7 +139,8 @@ Markdown with sections per result:
 - **Space:** Space Name (`KEY`)
 - **URL:** https://...
 - **Excerpt:** ...
-[optional body snippet]
+- **Relevant passages:**
+  - Heading: matching passage text...
 
 ## 2. Another Page
 ...
@@ -214,7 +215,7 @@ Include a note in PRs for any changes affecting credentials, `.env`, API behavio
 ## Dependencies
 
 - `requests` — HTTP calls to Confluence REST API
-- `beautifulsoup4` — HTML parsing for page body snippets
+- `beautifulsoup4` — HTML parsing for page headings and relevant passages
 - `python-dotenv` — `.env` file loading
 - `pytest` — test framework
 - `responses` — HTTP mocking for tests

@@ -8,13 +8,13 @@ Usage:
     python install.py --target codex       # install for Codex
     python install.py --target gemini      # install for Gemini
     python install.py --target copilot     # install for GitHub Copilot CLI
+    python install.py --target agents      # install to shared ~/.agents skills
     python install.py --dest /path/to/search-wiki/SKILL.md
     python install.py --check              # dry-run: print what would be written
 """
 
 import argparse
 import os
-import sys
 from pathlib import Path
 
 SKILL_TEMPLATE = Path(__file__).parent / "skills" / "search-wiki.md"
@@ -28,11 +28,9 @@ def skill_dest(target: str) -> Path:
     if target == "gemini":
         return Path.home() / ".gemini" / "skills" / "search-wiki" / "SKILL.md"
     if target == "copilot":
-        if sys.platform == "win32":
-            appdata = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
-            return appdata / "GitHub Copilot" / "skills" / "search-wiki" / "SKILL.md"
-        else:
-            return Path.home() / ".config" / "github-copilot" / "skills" / "search-wiki" / "SKILL.md"
+        return Path.home() / ".copilot" / "skills" / "search-wiki" / "SKILL.md"
+    if target == "agents":
+        return Path.home() / ".agents" / "skills" / "search-wiki" / "SKILL.md"
     return Path.home() / ".claude" / "skills" / "search-wiki" / "SKILL.md"
 
 
@@ -40,7 +38,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--target",
-        choices=("claude", "codex", "gemini", "copilot"),
+        choices=("claude", "codex", "gemini", "copilot", "agents"),
         default="claude",
         help="Assistant skill directory to install into (default: claude)",
     )
