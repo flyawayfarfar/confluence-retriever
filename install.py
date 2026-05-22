@@ -15,6 +15,7 @@ Usage:
 
 import argparse
 import os
+import sys
 from pathlib import Path
 
 SKILL_TEMPLATE = Path(__file__).parent / "skills" / "search-wiki.md"

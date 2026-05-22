@@ -16,7 +16,7 @@ The CLI is stateless, returns deterministic ranked markdown, and has no AI reaso
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 ```
 
 ### Run Tests

@@ -72,6 +72,7 @@ python3 scripts/wiki_answer.py --query "TERM" [--query "TERM2"] [--space KEY] [-
 | `--body-top N` | by depth | Override number of pages to fetch bodies for |
 | `--body-chars N` | by depth | Override max passage characters per page |
 | `--json` | off | Emit results as JSON instead of Markdown |
+| `-v`, `--verbose` | off | Emit diagnostic logging to stderr (CQL, request URLs, timings) |
 
 **Exit codes:**
 
