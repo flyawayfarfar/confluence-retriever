@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import logging
 import re
 import sys
 from pathlib import Path
@@ -81,6 +82,7 @@ def build_cql(queries: list[str], space: Optional[str]) -> str:
     if space:
         cql += f' AND space = "{cql_escape(space)}"'
 
+    logging.debug(f"Built CQL query: {cql}")
     return cql
 
 # ── HTML utils ───────────────────────────────────────────────────────────────
@@ -292,6 +294,7 @@ class ConfluenceAdapter:
                 "excerpt": strip_highlight_markers(item.get("excerpt", "")),
             })
 
+        logging.debug(f"Confluence search returned {len(results)} results")
         return results
 
     def get_page(self, page_id: str) -> Optional[dict]:
@@ -314,6 +317,7 @@ class ConfluenceAdapter:
             return None
 
         item = response.json()
+        logging.debug(f"Fetched page {page_id}: {item.get('title', 'untitled')}")
         return {
             "id": item.get("id"),
             "title": item.get("title", ""),
@@ -352,7 +356,9 @@ def rank_results(results: list[dict], queries: list[str], space: Optional[str]) 
     """Return results sorted by descending relevance score."""
     scored = [(score_result(r, queries, space), r) for r in results]
     scored.sort(key=lambda x: x[0], reverse=True)
-    return [r for _, r in scored]
+    ranked = [r for _, r in scored]
+    logging.debug(f"Ranked {len(ranked)} results by relevance score")
+    return ranked
 
 
 def resolve_body_options(
@@ -364,7 +370,9 @@ def resolve_body_options(
     default_top, default_chars = DEPTH_BODY_DEFAULTS[depth]
     resolved_top = default_top if body_top is None else body_top
     resolved_chars = default_chars if body_chars is None else body_chars
-    return max(0, resolved_top), max(0, resolved_chars)
+    result = max(0, resolved_top), max(0, resolved_chars)
+    logging.debug(f"Body options for depth={depth}: fetch {result[0]} pages, {result[1]} chars/page")
+    return result
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -402,13 +410,24 @@ def build_parser() -> argparse.ArgumentParser:
         "--json", action="store_true",
         help="Emit results as JSON instead of Markdown",
     )
+    parser.add_argument(
+        "-v", "--verbose", action="store_true",
+        help="Enable verbose debug logging",
+    )
     return parser
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
-def main() -> None:
+def main(argv: Optional[list[str]] = None) -> None:
     parser = build_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+
+    log_level = logging.DEBUG if args.verbose else logging.WARNING
+    logging.basicConfig(
+        level=log_level,
+        format="%(name)s [%(levelname)s] %(message)s"
+    )
+    log = logging.getLogger("wiki_answer")
 
     pat, base_url = load_config()
     adapter = ConfluenceAdapter(pat, base_url)
@@ -420,7 +439,8 @@ def main() -> None:
         print("No results found.")
         sys.exit(EXIT_OK)
 
-    print(f"# Wiki results for {', '.join(repr(q) for q in args.query)}\n")
+    if not args.json:
+        print(f"# Wiki results for {', '.join(repr(q) for q in args.query)}\n")
     body_by_id = {}
     body_top, body_chars = resolve_body_options(args.depth, args.body_top, args.body_chars)
     if body_top and body_chars:
@@ -435,6 +455,7 @@ def main() -> None:
                         max_chars=body_chars,
                     ),
                 }
+        logging.debug(f"Extracted body passages from {len(body_by_id)} pages")
 
     if args.json:
         payload = {

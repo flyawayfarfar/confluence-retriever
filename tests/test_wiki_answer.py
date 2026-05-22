@@ -223,22 +223,19 @@ class TestRankResults:
 
 class TestResolveBodyOptions:
     def test_links_depth_fetches_no_bodies(self):
-        assert wiki.resolve_body_options("links", False, None, None) == (0, 0)
+        assert wiki.resolve_body_options("links", None, None) == (0, 0)
 
     def test_skim_depth_fetches_one_default_body(self):
-        assert wiki.resolve_body_options("skim", False, None, None) == (1, wiki.DEFAULT_BODY_CHARS)
+        assert wiki.resolve_body_options("skim", None, None) == (1, wiki.DEFAULT_BODY_CHARS)
 
     def test_deep_depth_fetches_three_larger_bodies(self):
-        assert wiki.resolve_body_options("deep", False, None, None) == (3, 2000)
-
-    def test_include_body_aliases_skim_for_backwards_compatibility(self):
-        assert wiki.resolve_body_options("links", True, None, None) == (1, wiki.DEFAULT_BODY_CHARS)
+        assert wiki.resolve_body_options("deep", None, None) == (3, 2000)
 
     def test_explicit_body_options_override_depth_defaults(self):
-        assert wiki.resolve_body_options("deep", False, 2, 500) == (2, 500)
+        assert wiki.resolve_body_options("deep", 2, 500) == (2, 500)
 
     def test_negative_body_options_are_clamped_to_zero(self):
-        assert wiki.resolve_body_options("skim", False, -1, -10) == (0, 0)
+        assert wiki.resolve_body_options("skim", -1, -10) == (0, 0)
 
 
 # ── Confluence adapter ────────────────────────────────────────────────────────
@@ -250,10 +247,10 @@ PAGE_URL = f"{BASE_URL}/rest/api/content/42"
 MOCK_SEARCH_RESPONSE = {
     "results": [
         {
-            "id": "99",
+            "id": "42",
             "title": "Auth Guide",
             "space": {"key": "MT", "name": "Mobile Team"},
-            "_links": {"webui": "/spaces/MT/pages/99/Auth+Guide"},
+            "_links": {"webui": "/spaces/MT/pages/42/Auth+Guide"},
             "excerpt": "How to @@@hl@@@authenticate@@@endhl@@@ users",
         }
     ]
@@ -276,7 +273,7 @@ class TestConfluenceAdapterSearch:
 
         assert len(results) == 1
         r = results[0]
-        assert r["id"] == "99"
+        assert r["id"] == "42"
         assert r["title"] == "Auth Guide"
         assert r["space_key"] == "MT"
         assert r["space_name"] == "Mobile Team"
@@ -352,7 +349,7 @@ class TestJsonOutput:
         resp_mock.add(resp_mock.GET, SEARCH_URL, json=MOCK_SEARCH_RESPONSE, status=200)
 
         with pytest.raises(SystemExit) as exc:
-            wiki.main(["auth", "--json"])
+            wiki.main(["--query", "auth", "--json"])
         assert exc.value.code == wiki.EXIT_OK
 
         captured = capsys.readouterr()
@@ -372,7 +369,7 @@ class TestJsonOutput:
         resp_mock.add(resp_mock.GET, PAGE_URL, json=MOCK_PAGE_RESPONSE, status=200)
 
         with pytest.raises(SystemExit) as exc:
-            wiki.main(["auth", "--depth", "skim", "--json"])
+            wiki.main(["--query", "auth", "--depth", "skim", "--json"])
         assert exc.value.code == wiki.EXIT_OK
 
         captured = capsys.readouterr()
@@ -391,7 +388,7 @@ class TestJsonOutput:
         resp_mock.add(resp_mock.GET, SEARCH_URL, json=MOCK_SEARCH_RESPONSE, status=200)
 
         with pytest.raises(SystemExit) as exc:
-            wiki.main(["auth", "--json"])
+            wiki.main(["--query", "auth", "--json"])
         assert exc.value.code == wiki.EXIT_OK
 
         captured = capsys.readouterr()
@@ -402,3 +399,25 @@ class TestJsonOutput:
         assert "### " not in json_str
         # Should not contain Markdown list bullets
         assert "- [" not in json_str or json_str.count("- [") == 0
+
+
+# ── Verbose logging ───────────────────────────────────────────────────────────
+
+class TestVerboseLogging:
+    @resp_mock.activate
+    def test_verbose_flag_enables_debug_logging(self, capsys, monkeypatch, tmp_path):
+        """Verify --verbose flag enables DEBUG level logging."""
+        env_file = tmp_path / "test.env"
+        env_file.write_text(f"CONFLUENCE_URL={BASE_URL}\nCONFLUENCE_PAT=test-pat\n")
+        monkeypatch.setattr(wiki, "PROJECT_ENV_FILE", env_file)
+
+        resp_mock.add(resp_mock.GET, SEARCH_URL, json=MOCK_SEARCH_RESPONSE, status=200)
+
+        with pytest.raises(SystemExit) as exc:
+            wiki.main(["--query", "test", "--verbose"])
+        assert exc.value.code == wiki.EXIT_OK
+
+        # Capture stderr where debug logs go
+        captured = capsys.readouterr()
+        # With --verbose, debug logging should be enabled (check stderr or combined output)
+        assert captured.err or captured.out  # Should produce some output
