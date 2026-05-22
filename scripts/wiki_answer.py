@@ -2,6 +2,7 @@
 """Confluence wiki retrieval CLI — queries Confluence and returns ranked results."""
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -356,13 +357,11 @@ def rank_results(results: list[dict], queries: list[str], space: Optional[str]) 
 
 def resolve_body_options(
     depth: str,
-    include_body: bool,
     body_top: Optional[int],
     body_chars: Optional[int],
 ) -> tuple[int, int]:
     """Return the number of page bodies to fetch and characters per body."""
-    effective_depth = "skim" if include_body and depth == "links" else depth
-    default_top, default_chars = DEPTH_BODY_DEFAULTS[effective_depth]
+    default_top, default_chars = DEPTH_BODY_DEFAULTS[depth]
     resolved_top = default_top if body_top is None else body_top
     resolved_chars = default_chars if body_chars is None else body_chars
     return max(0, resolved_top), max(0, resolved_chars)
@@ -392,16 +391,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Retrieval depth: links=title/URL/excerpt only, skim=top 1 page passages, deep=top 3 page passages (default: links)",
     )
     parser.add_argument(
-        "--include-body", action="store_true",
-        help="Alias for --depth skim. Kept for compatibility.",
-    )
-    parser.add_argument(
         "--body-top", type=int, default=None, metavar="N",
         help="Override the number of top ranked pages to fetch bodies for",
     )
     parser.add_argument(
         "--body-chars", type=int, default=None, metavar="N",
         help="Override maximum relevant passage characters per page",
+    )
+    parser.add_argument(
+        "--json", action="store_true",
+        help="Emit results as JSON instead of Markdown",
     )
     return parser
 
@@ -423,7 +422,7 @@ def main() -> None:
 
     print(f"# Wiki results for {', '.join(repr(q) for q in args.query)}\n")
     body_by_id = {}
-    body_top, body_chars = resolve_body_options(args.depth, args.include_body, args.body_top, args.body_chars)
+    body_top, body_chars = resolve_body_options(args.depth, args.body_top, args.body_chars)
     if body_top and body_chars:
         for result in ranked[:body_top]:
             page = adapter.get_page(result["id"])
@@ -436,6 +435,28 @@ def main() -> None:
                         max_chars=body_chars,
                     ),
                 }
+
+    if args.json:
+        payload = {
+            "queries": args.query,
+            "space": args.space,
+            "depth": args.depth,
+            "results": [
+                {
+                    "rank": i + 1,
+                    "id": r["id"],
+                    "title": r["title"],
+                    "url": r["url"],
+                    "space_key": r["space_key"],
+                    "space_name": r["space_name"],
+                    "excerpt": r["excerpt"],
+                    **(body_by_id.get(r["id"], {})),
+                }
+                for i, r in enumerate(ranked)
+            ],
+        }
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        sys.exit(EXIT_OK)
 
     for i, r in enumerate(ranked, 1):
         print(f"## {i}. {r['title']}")

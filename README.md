@@ -22,8 +22,16 @@ For shallow searches it returns only links and excerpts. For detailed questions 
 
 ### 1. Install dependencies
 
+For end users running the CLI:
+
 ```bash
 pip install -r requirements.txt
+```
+
+For developers contributing to the project:
+
+```bash
+pip install -r requirements-dev.txt
 ```
 
 ### 2. Configure credentials
@@ -108,6 +116,7 @@ Or let your AI assistant call it automatically after installing the skill.
 | `--include-body` | off | Compatibility alias for `--depth skim` |
 | `--body-top N` | by depth | Override number of top ranked pages to fetch bodies for |
 | `--body-chars N` | by depth | Override max passage characters per fetched page |
+| `--json` | off | Emit results as JSON instead of Markdown |
 
 By default, the CLI performs one search request and returns compact title, URL, and excerpt results. Use `--depth skim` when the user needs details likely absent from snippets, such as process steps, troubleshooting, or API usage. Use `--depth deep` only for explicit requests to verify, compare, or inspect multiple pages. Defaults are `links` = no body text, `skim` = 1 page with up to 1200 relevant passage characters, and `deep` = 3 pages with up to 2000 relevant passage characters each.
 

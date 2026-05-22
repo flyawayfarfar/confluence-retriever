@@ -72,6 +72,7 @@ python3 scripts/wiki_answer.py --query "TERM" [--query "TERM2"] [--space KEY] [-
 | `--include-body` | off | Compatibility alias for `--depth skim` |
 | `--body-top N` | by depth | Override number of pages to fetch bodies for |
 | `--body-chars N` | by depth | Override max passage characters per page |
+| `--json` | off | Emit results as JSON instead of Markdown |
 
 **Exit codes:**
 
@@ -179,4 +180,4 @@ This keeps the dumb-retriever contract — the CLI still returns text, the host 
 
 ### Precision Fixtures
 
-A `precision-fixtures.json` with 10 known query → expected page-id pairs would let you measure retrieval quality without an LLM. Not yet written; would be a useful regression guard after any ranking changes.
+A `precision-fixtures.json` with 10 known query → expected page-id pairs would let you measure retrieval quality without an LLM. This file would live under a `fixtures/` directory (not yet created); would be a useful regression guard after any ranking changes.

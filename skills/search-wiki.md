@@ -87,9 +87,9 @@ Read the returned markdown and compose a direct answer:
 | `--depth links` | `links` | Title, URL, and excerpt only |
 | `--depth skim` | `links` | Fetch capped query-relevant passages from the top ranked page |
 | `--depth deep` | `links` | Fetch larger passage budgets from the top three ranked pages |
-| `--include-body` | off | Compatibility alias for `--depth skim` |
 | `--body-top N` | by depth | Override number of top ranked pages to fetch bodies for |
 | `--body-chars N` | by depth | Override max passage characters per fetched page |
+| `--json` | off | Emit results as JSON instead of Markdown (use for data integration) |
 
 ## Output Format
 
@@ -108,6 +108,8 @@ The CLI returns ranked markdown:
 ```
 
 Higher-ranked results are more likely to contain the answer. Start from result 1. Avoid `--depth deep` unless the user explicitly asks to compare, verify, or inspect multiple pages.
+
+> **Note:** The `--json` flag exists for programmatic use and data integration scenarios, but this skill uses the default Markdown format for human-readable synthesis.
 
 ## Error Handling
 

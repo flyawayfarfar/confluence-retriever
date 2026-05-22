@@ -1,7 +1,9 @@
 """Unit tests for wiki_answer.py — no real network calls."""
 
+import json
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 import responses as resp_mock
@@ -335,3 +337,68 @@ class TestConfluenceAdapterGetPage:
         resp_mock.add(resp_mock.GET, PAGE_URL, status=500)
         adapter = wiki.ConfluenceAdapter("test-pat", BASE_URL)
         assert adapter.get_page("42") is None
+
+
+# ── JSON output ───────────────────────────────────────────────────────────────
+
+class TestJsonOutput:
+    @resp_mock.activate
+    def test_json_mode_outputs_valid_json(self, capsys, monkeypatch, tmp_path):
+        """Verify --json flag produces valid, parseable JSON."""
+        env_file = tmp_path / "test.env"
+        env_file.write_text(f"CONFLUENCE_URL={BASE_URL}\nCONFLUENCE_PAT=test-pat\n")
+        monkeypatch.setattr(wiki, "PROJECT_ENV_FILE", env_file)
+
+        resp_mock.add(resp_mock.GET, SEARCH_URL, json=MOCK_SEARCH_RESPONSE, status=200)
+
+        with pytest.raises(SystemExit) as exc:
+            wiki.main(["auth", "--json"])
+        assert exc.value.code == wiki.EXIT_OK
+
+        captured = capsys.readouterr()
+        output = json.loads(captured.out)
+        assert output["queries"] == ["auth"]
+        assert len(output["results"]) == 1
+        assert output["results"][0]["title"] == "Auth Guide"
+
+    @resp_mock.activate
+    def test_json_mode_includes_body_passages_when_depth_skim(self, capsys, monkeypatch, tmp_path):
+        """Verify JSON includes body passages when depth is skim."""
+        env_file = tmp_path / "test.env"
+        env_file.write_text(f"CONFLUENCE_URL={BASE_URL}\nCONFLUENCE_PAT=test-pat\n")
+        monkeypatch.setattr(wiki, "PROJECT_ENV_FILE", env_file)
+
+        resp_mock.add(resp_mock.GET, SEARCH_URL, json=MOCK_SEARCH_RESPONSE, status=200)
+        resp_mock.add(resp_mock.GET, PAGE_URL, json=MOCK_PAGE_RESPONSE, status=200)
+
+        with pytest.raises(SystemExit) as exc:
+            wiki.main(["auth", "--depth", "skim", "--json"])
+        assert exc.value.code == wiki.EXIT_OK
+
+        captured = capsys.readouterr()
+        output = json.loads(captured.out)
+        assert output["depth"] == "skim"
+        # With skim depth, body content should be fetched and included
+        assert "passages" in output["results"][0] or "body_text" in output["results"][0]
+
+    @resp_mock.activate
+    def test_json_mode_excludes_markdown_artifacts(self, capsys, monkeypatch, tmp_path):
+        """Verify JSON output doesn't include Markdown-specific formatting."""
+        env_file = tmp_path / "test.env"
+        env_file.write_text(f"CONFLUENCE_URL={BASE_URL}\nCONFLUENCE_PAT=test-pat\n")
+        monkeypatch.setattr(wiki, "PROJECT_ENV_FILE", env_file)
+
+        resp_mock.add(resp_mock.GET, SEARCH_URL, json=MOCK_SEARCH_RESPONSE, status=200)
+
+        with pytest.raises(SystemExit) as exc:
+            wiki.main(["auth", "--json"])
+        assert exc.value.code == wiki.EXIT_OK
+
+        captured = capsys.readouterr()
+        output = json.loads(captured.out)
+        json_str = json.dumps(output)
+        # JSON should not contain Markdown heading syntax (##, ###, etc.)
+        assert "## " not in json_str
+        assert "### " not in json_str
+        # Should not contain Markdown list bullets
+        assert "- [" not in json_str or json_str.count("- [") == 0
