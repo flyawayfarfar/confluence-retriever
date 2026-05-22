@@ -1,5 +1,7 @@
 # confluence-retriever
 
+![tests](https://github.com/flyawayfarfar/confluence-retriever/actions/workflows/test.yml/badge.svg)
+
 A lightweight Confluence search CLI that retrieves ranked results from any Confluence instance. Designed as a "dumb retriever" — it fetches and ranks results, and your AI assistant (Claude Code, Codex, Gemini, etc.) synthesises the answer.
 
 ## How it works
@@ -116,6 +118,7 @@ Or let your AI assistant call it automatically after installing the skill.
 | `--body-top N` | by depth | Override number of top ranked pages to fetch bodies for |
 | `--body-chars N` | by depth | Override max passage characters per fetched page |
 | `--json` | off | Emit results as JSON instead of Markdown |
+| `-v`, `--verbose` | off | Emit diagnostic logging to stderr (CQL, request URLs, timings) |
 
 By default, the CLI performs one search request and returns compact title, URL, and excerpt results. Use `--depth skim` when the user needs details likely absent from snippets, such as process steps, troubleshooting, or API usage. Use `--depth deep` only for explicit requests to verify, compare, or inspect multiple pages. Defaults are `links` = no body text, `skim` = 1 page with up to 1200 relevant passage characters, and `deep` = 3 pages with up to 2000 relevant passage characters each.
 
