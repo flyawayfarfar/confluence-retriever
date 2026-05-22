@@ -69,7 +69,6 @@ python3 scripts/wiki_answer.py --query "TERM" [--query "TERM2"] [--space KEY] [-
 | `--depth links` | `links` | Title, URL, and excerpt only |
 | `--depth skim` | `links` | Fetch capped query-relevant passages from the top ranked page |
 | `--depth deep` | `links` | Fetch larger passage budgets from the top three ranked pages |
-| `--include-body` | off | Compatibility alias for `--depth skim` |
 | `--body-top N` | by depth | Override number of pages to fetch bodies for |
 | `--body-chars N` | by depth | Override max passage characters per page |
 | `--json` | off | Emit results as JSON instead of Markdown |
@@ -170,7 +169,7 @@ Prompt mapping for assistant skills:
 - `skim`: "how do I", "show steps", "read the page", "according to the docs", "setup", "configure", "troubleshoot", "API usage"
 - `deep`: "deep search", "verify", "compare pages", "source of truth", "exact wording", "think harder", "ultrathink", "be thorough"
 
-The main cost is latency (one extra API call per page fetched) and token cost. Defaults are no body text for `links`, 1 page with up to 1200 relevant passage characters for `skim`, and 3 pages with up to 2000 relevant passage characters each for `deep`. `--include-body` remains as a backwards-compatible alias for `--depth skim`.
+The main cost is latency (one extra API call per page fetched) and token cost. Defaults are no body text for `links`, 1 page with up to 1200 relevant passage characters for `skim`, and 3 pages with up to 2000 relevant passage characters each for `deep`.
 
 ```bash
 python3 scripts/wiki_answer.py --query "release process" --depth skim

@@ -113,7 +113,6 @@ Or let your AI assistant call it automatically after installing the skill.
 | `--depth links` | `links` | Title, URL, and excerpt only; cheapest mode |
 | `--depth skim` | `links` | Fetch capped query-relevant passages from the top ranked page |
 | `--depth deep` | `links` | Fetch larger passage budgets from the top three ranked pages |
-| `--include-body` | off | Compatibility alias for `--depth skim` |
 | `--body-top N` | by depth | Override number of top ranked pages to fetch bodies for |
 | `--body-chars N` | by depth | Override max passage characters per fetched page |
 | `--json` | off | Emit results as JSON instead of Markdown |
