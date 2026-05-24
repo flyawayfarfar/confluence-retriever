@@ -170,6 +170,35 @@ class TestQueryTokens:
         assert wiki.token_in_text("auth", "authentication guide")
 
 
+class TestExpandQueries:
+    def test_includes_original_query(self):
+        assert "auth guide" in wiki.expand_queries(["auth guide"])
+
+    def test_structural_drop_trailing_token(self):
+        result = wiki.expand_queries(["auth guide"])
+        assert "auth" in result
+
+    def test_structural_drop_leading_token(self):
+        result = wiki.expand_queries(["auth guide"])
+        assert "guide" in result
+
+    def test_abbrev_swap_added_after_structural(self):
+        result = wiki.expand_queries(["auth guide"])
+        assert "authentication guide" in result
+
+    def test_no_duplicates(self):
+        result = wiki.expand_queries(["auth"])
+        assert len(result) == len(set(r.lower() for r in result))
+
+    def test_respects_max_total_cap(self):
+        result = wiki.expand_queries(["authentication config guide"], max_total=3)
+        assert len(result) <= 3
+
+    def test_single_word_query_no_structural_duplicates(self):
+        result = wiki.expand_queries(["authentication"])
+        assert result.count("authentication") == 1
+
+
 def _make_result(title="", excerpt="", space_key="XX") -> dict:
     return {"id": "1", "title": title, "excerpt": excerpt,
             "space_key": space_key, "space_name": "Test Space",

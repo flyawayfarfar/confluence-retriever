@@ -119,10 +119,36 @@ _ABBREV_MAP: dict[str, str] = {
 }
 
 
+def _structural_variants(query: str) -> list[str]:
+    """Return structural sub-queries: drop trailing token, drop leading token, longest single token."""
+    words = query.split()
+    variants: list[str] = []
+    if len(words) >= 2:
+        variants.append(" ".join(words[:-1]))   # drop trailing token
+        variants.append(" ".join(words[1:]))    # drop leading token
+    if words:
+        longest = max(words, key=len)
+        if longest not in variants and longest != query:
+            variants.append(longest)
+    return variants
+
+
 def expand_queries(queries: list[str], max_total: int = ULTRA_MAX_QUERIES) -> list[str]:
-    """Return queries plus abbreviation variants, capped at max_total."""
+    """Return queries plus structural and abbreviation variants, capped at max_total."""
     expanded = list(queries)
     seen = {q.lower() for q in queries}
+
+    # Structural variants first (higher relevance than abbrev swaps)
+    for query in queries:
+        for variant in _structural_variants(query):
+            if len(expanded) >= max_total:
+                break
+            if variant.lower() not in seen:
+                expanded.append(variant)
+                seen.add(variant.lower())
+        if len(expanded) >= max_total:
+            break
+
     for query in queries:
         if len(expanded) >= max_total:
             break
