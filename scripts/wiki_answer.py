@@ -325,13 +325,16 @@ def extract_relevant_passages(
     return selected
 
 
+_CROSS_LINK_RE = re.compile(r"/pages/(\d+)(?:/|$|\?|#)")
+
+
 def extract_cross_links(html: str) -> list[str]:
     """Return Confluence page IDs found in internal links within page HTML."""
     soup = BeautifulSoup(html, "html.parser")
     page_ids: list[str] = []
     seen: set[str] = set()
     for a in soup.find_all("a", href=True):
-        m = re.search(r"/pages/(\d+)/", a["href"])
+        m = _CROSS_LINK_RE.search(a["href"])
         if m:
             pid = m.group(1)
             if pid not in seen:

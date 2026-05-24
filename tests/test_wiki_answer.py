@@ -111,6 +111,31 @@ class TestExtractHeadings:
         assert wiki.extract_headings("<p>Just a paragraph</p>") == []
 
 
+class TestExtractCrossLinks:
+    def test_extracts_id_with_trailing_slash(self):
+        html = '<a href="/pages/12345/Some-Page">link</a>'
+        assert wiki.extract_cross_links(html) == ["12345"]
+
+    def test_extracts_id_without_trailing_slash(self):
+        html = '<a href="/pages/12345">link</a>'
+        assert wiki.extract_cross_links(html) == ["12345"]
+
+    def test_extracts_id_from_cloud_wiki_url(self):
+        html = '<a href="/wiki/spaces/MT/pages/99999/Title">link</a>'
+        assert wiki.extract_cross_links(html) == ["99999"]
+
+    def test_deduplicates_same_page(self):
+        html = '<a href="/pages/42/">a</a><a href="/pages/42/">b</a>'
+        assert wiki.extract_cross_links(html) == ["42"]
+
+    def test_ignores_non_page_links(self):
+        html = '<a href="/display/MT/overview">link</a>'
+        assert wiki.extract_cross_links(html) == []
+
+    def test_empty_html(self):
+        assert wiki.extract_cross_links("") == []
+
+
 class TestExtractRelevantPassages:
     def test_prefers_matching_passage_below_intro(self):
         html = """
