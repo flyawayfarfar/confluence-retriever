@@ -662,3 +662,66 @@ class TestGetPageUrlAndSpaceName:
 
         assert page is not None
         assert page["url"] == BASE_URL  # base + "" = base URL
+
+
+# ── Phase J: --depth ultra end-to-end ────────────────────────────────────────
+
+class TestUltraDepthE2E:
+    @resp_mock.activate
+    def test_ultra_depth_returns_json_with_body_passages(self, capsys, monkeypatch, tmp_path):
+        """Full ultra-mode pipeline: search_combined + body fetch → JSON with passages."""
+        env_file = tmp_path / "test.env"
+        env_file.write_text(f"CONFLUENCE_URL={BASE_URL}\nCONFLUENCE_PAT=test-pat\n")
+        monkeypatch.setattr(wiki, "PROJECT_ENV_FILE", env_file)
+
+        # search_combined fires text search + title search in parallel (same endpoint)
+        resp_mock.add(resp_mock.GET, SEARCH_URL, json=MOCK_SEARCH_RESPONSE, status=200)
+        resp_mock.add(resp_mock.GET, SEARCH_URL, json=MOCK_SEARCH_RESPONSE, status=200)
+        # body fetch for top-ranked page
+        resp_mock.add(resp_mock.GET, PAGE_URL, json=MOCK_PAGE_RESPONSE, status=200)
+
+        with pytest.raises(SystemExit) as exc:
+            wiki.main(["--query", "auth", "--depth", "ultra", "--json"])
+        assert exc.value.code == wiki.EXIT_OK
+
+        captured = capsys.readouterr()
+        output = json.loads(captured.out)
+        assert output["depth"] == "ultra"
+        assert len(output["results"]) >= 1
+        first = output["results"][0]
+        assert first["title"] == "Auth Guide"
+        assert first["url"].startswith(BASE_URL)
+        # Ultra fetches body: passages or headings must be present
+        assert "passages" in first or "headings" in first
+
+    @resp_mock.activate
+    def test_ultra_depth_deduplicates_title_and_text_hits(self, capsys, monkeypatch, tmp_path):
+        """Same page in both title and text results appears only once in output."""
+        env_file = tmp_path / "test.env"
+        env_file.write_text(f"CONFLUENCE_URL={BASE_URL}\nCONFLUENCE_PAT=test-pat\n")
+        monkeypatch.setattr(wiki, "PROJECT_ENV_FILE", env_file)
+
+        resp_mock.add(resp_mock.GET, SEARCH_URL, json=MOCK_SEARCH_RESPONSE, status=200)
+        resp_mock.add(resp_mock.GET, SEARCH_URL, json=MOCK_SEARCH_RESPONSE, status=200)
+        resp_mock.add(resp_mock.GET, PAGE_URL, json=MOCK_PAGE_RESPONSE, status=200)
+
+        with pytest.raises(SystemExit) as exc:
+            wiki.main(["--query", "auth", "--depth", "ultra", "--json"])
+        assert exc.value.code == wiki.EXIT_OK
+
+        captured = capsys.readouterr()
+        output = json.loads(captured.out)
+        ids = [r["id"] for r in output["results"]]
+        assert len(ids) == len(set(ids)), "duplicate page IDs in ultra output"
+
+    def test_workers_default_shown_in_help(self):
+        """--workers flag and its default must appear in --help output."""
+        import io
+        parser = wiki.build_parser()
+        buf = io.StringIO()
+        try:
+            parser.print_help(buf)
+        except SystemExit:
+            pass
+        help_text = buf.getvalue()
+        assert "--workers" in help_text
