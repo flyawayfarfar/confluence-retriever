@@ -604,7 +604,7 @@ def score_result(
             try:
                 mod_dt = datetime.fromisoformat(last_modified.replace("Z", "+00:00"))
                 days_ago = max(0, (datetime.now(tz=timezone.utc) - mod_dt).days)
-                score += int(10 * math.exp(-days_ago / halflife_days))
+                score = round(score * math.exp(-days_ago / halflife_days))
             except (ValueError, TypeError):
                 pass
 

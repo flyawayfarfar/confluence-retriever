@@ -104,7 +104,6 @@ class TestProximityPhaseD:
 # ── Phase I: multiplicative recency ──────────────────────────────────────────
 
 class TestRecencyPhaseI:
-    @pytest.mark.xfail(strict=True, reason="enabled by Phase I: multiplicative recency")
     def test_additive_recency_does_not_boost_zero_relevance_page(self):
         """Freshness must not push a zero-relevance page above a relevant page.
 
@@ -132,7 +131,6 @@ class TestRecencyPhaseI:
         # With multiplicative recency, z = 0 and r > 0 → correct.
         assert r > z
 
-    @pytest.mark.xfail(strict=True, reason="enabled by Phase I: multiplicative recency")
     def test_huge_halflife_matches_no_halflife_score(self):
         """Recency with halflife → ∞ should not change scores at all.
 
