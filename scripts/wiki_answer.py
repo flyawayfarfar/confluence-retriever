@@ -206,21 +206,23 @@ def extract_text_blocks(html: str) -> list[dict]:
 
 
 def _proximity_bonus(text: str, tokens: list[str]) -> int:
-    """Return +2 if any two tokens appear within 50 characters of each other."""
-    positions: list[int] = []
-    for token in tokens:
+    """Return +2 if any two *distinct* tokens appear within 50 characters of each other."""
+    hits: list[tuple[int, int]] = []  # (position, token_index)
+    for tok_idx, token in enumerate(tokens):
         pos = 0
         while True:
             idx = text.find(token, pos)
             if idx == -1:
                 break
-            positions.append(idx)
+            hits.append((idx, tok_idx))
             pos = idx + 1
-    if len(positions) < 2:
+    if len(hits) < 2:
         return 0
-    positions.sort()
-    for i in range(len(positions) - 1):
-        if positions[i + 1] - positions[i] <= 50:
+    hits.sort()
+    for i in range(len(hits) - 1):
+        pos_a, ti_a = hits[i]
+        pos_b, ti_b = hits[i + 1]
+        if ti_a != ti_b and pos_b - pos_a <= 50:
             return 2
     return 0
 

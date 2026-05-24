@@ -92,16 +92,10 @@ class TestBasicScorerInvariants:
 # ── Phase D: _proximity_bonus same-token false positive ──────────────────────
 
 class TestProximityPhaseD:
-    @pytest.mark.xfail(strict=True, reason="enabled by Phase D: proximity bug fix")
     def test_proximity_does_not_trigger_on_single_repeated_token(self):
-        """A single token repeated close together must NOT trigger the proximity bonus.
-
-        Current bug: the function pools all positions into one list, so two hits of
-        the same token within 50 chars return 2 instead of 0.
-        """
+        """A single token repeated close together must NOT trigger the proximity bonus."""
         assert wiki._proximity_bonus("auth and auth again", ["auth"]) == 0
 
-    @pytest.mark.xfail(strict=True, reason="enabled by Phase D: proximity bug fix")
     def test_proximity_returns_zero_for_single_token_list(self):
         """A query with only one distinct token can never yield a proximity bonus."""
         assert wiki._proximity_bonus("authentication is required for auth", ["auth"]) == 0
