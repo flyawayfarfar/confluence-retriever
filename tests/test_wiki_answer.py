@@ -422,6 +422,75 @@ class TestTypedExceptions:
         assert args.workers == 4
 
 
+# ── search_combined ───────────────────────────────────────────────────────────
+
+TITLE_ONLY_RESPONSE = {
+    "results": [
+        {
+            "id": "99",
+            "title": "Auth Overview",
+            "space": {"key": "MT", "name": "Mobile Team"},
+            "_links": {"webui": "/spaces/MT/pages/99/Auth+Overview"},
+            "excerpt": "",
+            "version": {"when": ""},
+        }
+    ]
+}
+
+TITLE_AND_TEXT_RESPONSE = {
+    "results": [
+        {
+            "id": "42",
+            "title": "Auth Guide",
+            "space": {"key": "MT", "name": "Mobile Team"},
+            "_links": {"webui": "/spaces/MT/pages/42/Auth+Guide"},
+            "excerpt": "How to authenticate users",
+            "version": {"when": ""},
+        }
+    ]
+}
+
+
+class TestSearchCombined:
+    @resp_mock.activate
+    def test_title_only_pages_included_in_results(self):
+        # text search returns page 42, title search returns page 99
+        resp_mock.add(resp_mock.GET, SEARCH_URL, json=TITLE_AND_TEXT_RESPONSE, status=200)
+        resp_mock.add(resp_mock.GET, SEARCH_URL, json=TITLE_ONLY_RESPONSE, status=200)
+        adapter = wiki.ConfluenceAdapter("test-pat", BASE_URL)
+        results = adapter.search_combined(["auth"], None, 10)
+        ids = [r["id"] for r in results]
+        assert "42" in ids
+        assert "99" in ids
+
+    @resp_mock.activate
+    def test_title_hit_flag_set_for_overlapping_page(self):
+        # same page in both text and title search
+        resp_mock.add(resp_mock.GET, SEARCH_URL, json=TITLE_AND_TEXT_RESPONSE, status=200)
+        resp_mock.add(resp_mock.GET, SEARCH_URL, json=TITLE_AND_TEXT_RESPONSE, status=200)
+        adapter = wiki.ConfluenceAdapter("test-pat", BASE_URL)
+        results = adapter.search_combined(["auth"], None, 10)
+        page_42 = next(r for r in results if r["id"] == "42")
+        assert page_42["_title_hit"] is True
+
+    @resp_mock.activate
+    def test_merged_results_capped_at_limit(self):
+        # text returns 1, title returns 1 different page, limit=1
+        resp_mock.add(resp_mock.GET, SEARCH_URL, json=TITLE_AND_TEXT_RESPONSE, status=200)
+        resp_mock.add(resp_mock.GET, SEARCH_URL, json=TITLE_ONLY_RESPONSE, status=200)
+        adapter = wiki.ConfluenceAdapter("test-pat", BASE_URL)
+        results = adapter.search_combined(["auth"], None, 1)
+        assert len(results) <= 1
+
+    @resp_mock.activate
+    def test_title_search_auth_error_propagates(self):
+        resp_mock.add(resp_mock.GET, SEARCH_URL, json=TITLE_AND_TEXT_RESPONSE, status=200)
+        resp_mock.add(resp_mock.GET, SEARCH_URL, status=401)
+        adapter = wiki.ConfluenceAdapter("bad-pat", BASE_URL)
+        with pytest.raises(wiki.ConfluenceAuthError):
+            adapter.search_combined(["auth"], None, 10)
+
+
 # ── JSON output ───────────────────────────────────────────────────────────────
 
 class TestJsonOutput:

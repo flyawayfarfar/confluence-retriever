@@ -497,12 +497,24 @@ class ConfluenceAdapter:
         if space:
             title_cql += f' AND space = "{cql_escape(space)}"'
 
-        def _title_ids() -> set[str]:
+        def _title_results() -> list[dict]:
             try:
                 params = {"cql": title_cql, "limit": limit, "expand": "space,version"}
                 resp = self._session.get(self._search_endpoint, params=params, timeout=TIMEOUT_SECONDS)
                 if resp.ok:
-                    return {item.get("id") for item in resp.json().get("results", [])}
+                    return [
+                        {
+                            "id": item.get("id"),
+                            "title": item.get("title", ""),
+                            "space_key": item.get("space", {}).get("key", ""),
+                            "space_name": item.get("space", {}).get("name", ""),
+                            "url": f"{self._base_url}{item.get('_links', {}).get('webui', '')}",
+                            "excerpt": strip_highlight_markers(item.get("excerpt", "")),
+                            "last_modified": item.get("version", {}).get("when", ""),
+                            "_title_hit": True,
+                        }
+                        for item in resp.json().get("results", [])
+                    ]
                 if resp.status_code in (401, 403):
                     raise ConfluenceAuthError(
                         f"Auth failed in title search ({resp.status_code}). Check your CONFLUENCE_PAT."
@@ -511,19 +523,31 @@ class ConfluenceAdapter:
                 raise
             except (requests.exceptions.RequestException, ValueError) as e:
                 logging.warning("title search failed, continuing without title hits: %s", e)
-            return set()
+            return []
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(2, workers)) as pool:
             text_future = pool.submit(self.search, queries, space, limit)
-            title_future = pool.submit(_title_ids)
+            title_future = pool.submit(_title_results)
             text_results = text_future.result()
-            title_hits = title_future.result()
+            title_hit_list = title_future.result()
 
+        title_hit_ids = {r["id"] for r in title_hit_list}
         for r in text_results:
-            r["_title_hit"] = r["id"] in title_hits
+            r["_title_hit"] = r["id"] in title_hit_ids
 
-        logging.debug(f"search_combined: {len(text_results)} results, {len(title_hits)} title hits")
-        return text_results
+        # Append title-only pages not already in text results
+        text_ids = {r["id"] for r in text_results}
+        merged = list(text_results)
+        for r in title_hit_list:
+            if r["id"] not in text_ids:
+                merged.append(r)
+
+        merged = merged[:limit]
+        logging.debug(
+            "search_combined: %d text, %d title hits, %d merged",
+            len(text_results), len(title_hit_list), len(merged),
+        )
+        return merged
 
 
 # ── Ranker ───────────────────────────────────────────────────────────────────
