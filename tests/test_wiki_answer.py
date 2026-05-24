@@ -281,20 +281,18 @@ class TestConfluenceAdapterSearch:
         assert "@@@" not in r["excerpt"]
 
     @resp_mock.activate
-    def test_exits_on_401(self):
+    def test_raises_auth_error_on_401(self):
         resp_mock.add(resp_mock.GET, SEARCH_URL, status=401)
         adapter = wiki.ConfluenceAdapter("bad-pat", BASE_URL)
-        with pytest.raises(SystemExit) as exc:
+        with pytest.raises(wiki.ConfluenceAuthError):
             adapter.search(["q"], None, 5)
-        assert exc.value.code == wiki.EXIT_AUTH
 
     @resp_mock.activate
-    def test_exits_on_403(self):
+    def test_raises_auth_error_on_403(self):
         resp_mock.add(resp_mock.GET, SEARCH_URL, status=403)
         adapter = wiki.ConfluenceAdapter("bad-pat", BASE_URL)
-        with pytest.raises(SystemExit) as exc:
+        with pytest.raises(wiki.ConfluenceAuthError):
             adapter.search(["q"], None, 5)
-        assert exc.value.code == wiki.EXIT_AUTH
 
     @resp_mock.activate
     def test_empty_results(self):
@@ -303,12 +301,11 @@ class TestConfluenceAdapterSearch:
         assert adapter.search(["q"], None, 5) == []
 
     @resp_mock.activate
-    def test_exits_on_http_error_without_traceback(self):
+    def test_raises_network_error_on_429(self):
         resp_mock.add(resp_mock.GET, SEARCH_URL, status=429)
         adapter = wiki.ConfluenceAdapter("test-pat", BASE_URL)
-        with pytest.raises(SystemExit) as exc:
+        with pytest.raises(wiki.ConfluenceNetworkError):
             adapter.search(["q"], None, 5)
-        assert exc.value.code == wiki.EXIT_NETWORK
 
 
 class TestConfluenceAdapterGetPage:
@@ -330,10 +327,70 @@ class TestConfluenceAdapterGetPage:
         assert adapter.get_page("42") is None
 
     @resp_mock.activate
-    def test_returns_none_on_500(self):
+    def test_raises_network_error_on_500(self):
         resp_mock.add(resp_mock.GET, PAGE_URL, status=500)
         adapter = wiki.ConfluenceAdapter("test-pat", BASE_URL)
-        assert adapter.get_page("42") is None
+        with pytest.raises(wiki.ConfluenceNetworkError):
+            adapter.get_page("42")
+
+
+# ── Typed exceptions & --workers ──────────────────────────────────────────────
+
+class TestTypedExceptions:
+    @resp_mock.activate
+    def test_get_page_raises_auth_error_on_401(self):
+        resp_mock.add(resp_mock.GET, PAGE_URL, status=401)
+        adapter = wiki.ConfluenceAdapter("bad-pat", BASE_URL)
+        with pytest.raises(wiki.ConfluenceAuthError):
+            adapter.get_page("42")
+
+    @resp_mock.activate
+    def test_get_page_raises_network_error_on_connection_refused(self):
+        import requests.exceptions
+        resp_mock.add(resp_mock.GET, PAGE_URL, body=requests.exceptions.ConnectionError("refused"))
+        adapter = wiki.ConfluenceAdapter("test-pat", BASE_URL)
+        with pytest.raises(wiki.ConfluenceNetworkError):
+            adapter.get_page("42")
+
+    @resp_mock.activate
+    def test_main_exits_3_on_auth_error(self, monkeypatch, tmp_path):
+        env_file = tmp_path / "test.env"
+        env_file.write_text(f"CONFLUENCE_URL={BASE_URL}\nCONFLUENCE_PAT=bad-pat\n")
+        monkeypatch.setattr(wiki, "PROJECT_ENV_FILE", env_file)
+        resp_mock.add(resp_mock.GET, SEARCH_URL, status=401)
+        with pytest.raises(SystemExit) as exc:
+            wiki.main(["--query", "auth"])
+        assert exc.value.code == wiki.EXIT_AUTH
+
+    @resp_mock.activate
+    def test_main_exits_4_on_network_error(self, monkeypatch, tmp_path):
+        env_file = tmp_path / "test.env"
+        env_file.write_text(f"CONFLUENCE_URL={BASE_URL}\nCONFLUENCE_PAT=test-pat\n")
+        monkeypatch.setattr(wiki, "PROJECT_ENV_FILE", env_file)
+        resp_mock.add(resp_mock.GET, SEARCH_URL, status=503)
+        with pytest.raises(SystemExit) as exc:
+            wiki.main(["--query", "auth"])
+        assert exc.value.code == wiki.EXIT_NETWORK
+
+    @resp_mock.activate
+    def test_get_pages_logs_warning_for_failed_pages(self, caplog):
+        import logging
+        resp_mock.add(resp_mock.GET, PAGE_URL, status=500)
+        adapter = wiki.ConfluenceAdapter("test-pat", BASE_URL)
+        with caplog.at_level(logging.WARNING):
+            result = adapter.get_pages(["42"])
+        assert result == {}
+        assert any("42" in m for m in caplog.messages)
+
+    def test_workers_flag_accepted_by_parser(self):
+        parser = wiki.build_parser()
+        args = parser.parse_args(["--query", "q", "--workers", "8"])
+        assert args.workers == 8
+
+    def test_workers_flag_default_is_4(self):
+        parser = wiki.build_parser()
+        args = parser.parse_args(["--query", "q"])
+        assert args.workers == 4
 
 
 # ── JSON output ───────────────────────────────────────────────────────────────

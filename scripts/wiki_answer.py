@@ -2,15 +2,20 @@
 """Confluence wiki retrieval CLI — queries Confluence and returns ranked results."""
 
 import argparse
+import concurrent.futures
 import json
 import logging
+import math
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 import requests
 from bs4 import BeautifulSoup
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -24,12 +29,23 @@ DEPTH_BODY_DEFAULTS = {
     "links": (0, 0),
     "skim": (1, DEFAULT_BODY_CHARS),
     "deep": (3, 2000),
+    "ultra": (5, 3000),
 }
+ULTRA_CROSSLINK_EXTRA = 2  # max additional cross-linked pages in ultra mode
+ULTRA_MAX_QUERIES = 6      # cap for expand_queries()
 
 EXIT_OK = 0
 EXIT_CONFIG = 2
 EXIT_AUTH = 3
 EXIT_NETWORK = 4
+
+
+class ConfluenceAuthError(Exception):
+    """Raised when Confluence returns 401 or 403."""
+
+
+class ConfluenceNetworkError(Exception):
+    """Raised when Confluence is unreachable or returns an unexpected HTTP error."""
 
 # ── PAT loader ────────────────────────────────────────────────────────────────
 
@@ -84,6 +100,42 @@ def build_cql(queries: list[str], space: Optional[str]) -> str:
 
     logging.debug(f"Built CQL query: {cql}")
     return cql
+
+# ── Query expansion ───────────────────────────────────────────────────────────
+
+_ABBREV_MAP: dict[str, str] = {
+    "auth": "authentication",
+    "authentication": "auth",
+    "docs": "documentation",
+    "documentation": "docs",
+    "config": "configuration",
+    "configuration": "config",
+    "repo": "repository",
+    "repository": "repo",
+    "env": "environment",
+    "environment": "env",
+    "deploy": "deployment",
+    "deployment": "deploy",
+}
+
+
+def expand_queries(queries: list[str], max_total: int = ULTRA_MAX_QUERIES) -> list[str]:
+    """Return queries plus abbreviation variants, capped at max_total."""
+    expanded = list(queries)
+    seen = {q.lower() for q in queries}
+    for query in queries:
+        if len(expanded) >= max_total:
+            break
+        for abbrev, expansion in _ABBREV_MAP.items():
+            if len(expanded) >= max_total:
+                break
+            if re.search(rf"\b{re.escape(abbrev)}\b", query, flags=re.IGNORECASE):
+                variant = re.sub(rf"\b{re.escape(abbrev)}\b", expansion, query, flags=re.IGNORECASE)
+                if variant.lower() not in seen:
+                    expanded.append(variant)
+                    seen.add(variant.lower())
+    return expanded
+
 
 # ── HTML utils ───────────────────────────────────────────────────────────────
 
@@ -153,6 +205,26 @@ def extract_text_blocks(html: str) -> list[dict]:
     return blocks
 
 
+def _proximity_bonus(text: str, tokens: list[str]) -> int:
+    """Return +2 if any two tokens appear within 50 characters of each other."""
+    positions: list[int] = []
+    for token in tokens:
+        pos = 0
+        while True:
+            idx = text.find(token, pos)
+            if idx == -1:
+                break
+            positions.append(idx)
+            pos = idx + 1
+    if len(positions) < 2:
+        return 0
+    positions.sort()
+    for i in range(len(positions) - 1):
+        if positions[i + 1] - positions[i] <= 50:
+            return 2
+    return 0
+
+
 def score_text_block(block: dict, queries: list[str]) -> int:
     """Score a page text block for query relevance."""
     score = 0
@@ -166,11 +238,15 @@ def score_text_block(block: dict, queries: list[str]) -> int:
         if query_lower in text_lower:
             score += 4
 
-    for token in query_tokens(queries):
+    tokens = query_tokens(queries)
+    for token in tokens:
         if token_in_text(token, heading_lower):
             score += 2
         if token_in_text(token, text_lower):
             score += 1
+
+    if len(tokens) >= 2:
+        score += _proximity_bonus(text_lower, tokens)
 
     return score
 
@@ -221,6 +297,21 @@ def extract_relevant_passages(
     return selected
 
 
+def extract_cross_links(html: str) -> list[str]:
+    """Return Confluence page IDs found in internal links within page HTML."""
+    soup = BeautifulSoup(html, "html.parser")
+    page_ids: list[str] = []
+    seen: set[str] = set()
+    for a in soup.find_all("a", href=True):
+        m = re.search(r"/pages/(\d+)/", a["href"])
+        if m:
+            pid = m.group(1)
+            if pid not in seen:
+                seen.add(pid)
+                page_ids.append(pid)
+    return page_ids
+
+
 def query_tokens(queries: list[str]) -> list[str]:
     """Return unique searchable tokens from query phrases."""
     tokens: list[str] = []
@@ -248,7 +339,18 @@ class ConfluenceAdapter:
         self._base_url = base_url
         self._search_endpoint = f"{base_url}/rest/api/content/search"
         self._page_endpoint = f"{base_url}/rest/api/content/{{page_id}}"
+        self._page_cache: dict[str, dict] = {}
         self._session = requests.Session()
+        retry = Retry(
+            total=3,
+            backoff_factor=0.5,
+            status_forcelist={429, 502, 503, 504},
+            allowed_methods={"GET"},
+            raise_on_status=False,
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        self._session.mount("https://", adapter)
+        self._session.mount("http://", adapter)
         self._session.headers.update({
             "Authorization": f"Bearer {pat}",
             "Accept": "application/json",
@@ -266,21 +368,21 @@ class ConfluenceAdapter:
         try:
             response = self._session.get(self._search_endpoint, params=params, timeout=TIMEOUT_SECONDS)
         except requests.exceptions.ConnectionError as e:
-            print(f"ERROR: Cannot reach {self._base_url}: {e}", file=sys.stderr)
-            sys.exit(EXIT_NETWORK)
+            raise ConfluenceNetworkError(f"Cannot reach {self._base_url}: {e}") from e
         except requests.exceptions.Timeout:
-            print(f"ERROR: Request timed out after {TIMEOUT_SECONDS}s", file=sys.stderr)
-            sys.exit(EXIT_NETWORK)
+            raise ConfluenceNetworkError(f"Request timed out after {TIMEOUT_SECONDS}s")
 
         if response.status_code in (401, 403):
-            print(f"ERROR: Auth failed ({response.status_code}). Check your CONFLUENCE_PAT.", file=sys.stderr)
-            sys.exit(EXIT_AUTH)
+            raise ConfluenceAuthError(
+                f"Auth failed ({response.status_code}). Check your CONFLUENCE_PAT."
+            )
 
         try:
             response.raise_for_status()
         except requests.exceptions.HTTPError:
-            print(f"ERROR: Confluence returned HTTP {response.status_code}", file=sys.stderr)
-            sys.exit(EXIT_NETWORK)
+            raise ConfluenceNetworkError(
+                f"Confluence returned HTTP {response.status_code}"
+            ) from None
         data = response.json()
 
         results = []
@@ -292,6 +394,8 @@ class ConfluenceAdapter:
                 "space_name": item.get("space", {}).get("name", ""),
                 "url": f"{self._base_url}{item.get('_links', {}).get('webui', '')}",
                 "excerpt": strip_highlight_markers(item.get("excerpt", "")),
+                "last_modified": item.get("version", {}).get("when", ""),
+                "_title_hit": False,
             })
 
         logging.debug(f"Confluence search returned {len(results)} results")
@@ -299,62 +403,170 @@ class ConfluenceAdapter:
 
     def get_page(self, page_id: str) -> Optional[dict]:
         """Fetch a single page's body and metadata. Returns None on error."""
+        if page_id in self._page_cache:
+            return self._page_cache[page_id]
+
         url = self._page_endpoint.format(page_id=page_id)
         params = {"expand": "body.storage,space"}
 
         try:
             response = self._session.get(url, params=params, timeout=TIMEOUT_SECONDS)
         except requests.exceptions.RequestException as e:
-            print(f"WARNING: Failed to fetch page {page_id}: {e}", file=sys.stderr)
-            return None
+            raise ConfluenceNetworkError(f"Failed to fetch page {page_id}: {e}") from e
+
+        if response.status_code in (401, 403):
+            raise ConfluenceAuthError(
+                f"Auth failed fetching page {page_id} ({response.status_code}). Check your CONFLUENCE_PAT."
+            )
 
         if response.status_code == 404:
-            print(f"WARNING: Page {page_id} not found", file=sys.stderr)
+            logging.warning("page %s not found", page_id)
             return None
 
         if not response.ok:
-            print(f"WARNING: Page {page_id} returned HTTP {response.status_code}", file=sys.stderr)
-            return None
+            raise ConfluenceNetworkError(f"Page {page_id} returned HTTP {response.status_code}")
 
         item = response.json()
         logging.debug(f"Fetched page {page_id}: {item.get('title', 'untitled')}")
-        return {
+        result = {
             "id": item.get("id"),
             "title": item.get("title", ""),
             "space_key": item.get("space", {}).get("key", ""),
             "body_html": item.get("body", {}).get("storage", {}).get("value", ""),
         }
+        self._page_cache[page_id] = result
+        return result
+
+    def get_pages(self, page_ids: list[str], workers: int = 4) -> dict[str, dict]:
+        """Fetch multiple pages in parallel. Returns mapping of page_id → page dict."""
+        uncached = [pid for pid in page_ids if pid not in self._page_cache]
+        if uncached:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = {pool.submit(self.get_page, pid): pid for pid in uncached}
+                for future in concurrent.futures.as_completed(futures):
+                    pid = futures[future]
+                    try:
+                        future.result()  # cache updated inside get_page()
+                    except ConfluenceAuthError:
+                        raise
+                    except ConfluenceNetworkError as e:
+                        logging.warning("page fetch failed for %s: %s", pid, e)
+        result = {pid: self._page_cache[pid] for pid in page_ids if pid in self._page_cache}
+        missing = [pid for pid in page_ids if pid not in result]
+        if missing:
+            logging.warning(
+                "page fetch dropped %d/%d pages: %s", len(missing), len(page_ids), missing
+            )
+        return result
+
+    def search_combined(
+        self, queries: list[str], space: Optional[str], limit: int, workers: int = 4
+    ) -> list[dict]:
+        """Parallel title + text CQL searches merged by page ID. Title hits marked with _title_hit=True."""
+        title_terms = [f'title ~ "{cql_escape(q)}"' for q in queries]
+        title_cql = ("(" + " OR ".join(title_terms) + ")" if len(title_terms) > 1 else title_terms[0])
+        title_cql += ' AND type = "page"'
+        if space:
+            title_cql += f' AND space = "{cql_escape(space)}"'
+
+        def _title_ids() -> set[str]:
+            try:
+                params = {"cql": title_cql, "limit": limit, "expand": "space,version"}
+                resp = self._session.get(self._search_endpoint, params=params, timeout=TIMEOUT_SECONDS)
+                if resp.ok:
+                    return {item.get("id") for item in resp.json().get("results", [])}
+                if resp.status_code in (401, 403):
+                    raise ConfluenceAuthError(
+                        f"Auth failed in title search ({resp.status_code}). Check your CONFLUENCE_PAT."
+                    )
+            except ConfluenceAuthError:
+                raise
+            except (requests.exceptions.RequestException, ValueError) as e:
+                logging.warning("title search failed, continuing without title hits: %s", e)
+            return set()
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(2, workers)) as pool:
+            text_future = pool.submit(self.search, queries, space, limit)
+            title_future = pool.submit(_title_ids)
+            text_results = text_future.result()
+            title_hits = title_future.result()
+
+        for r in text_results:
+            r["_title_hit"] = r["id"] in title_hits
+
+        logging.debug(f"search_combined: {len(text_results)} results, {len(title_hits)} title hits")
+        return text_results
+
 
 # ── Ranker ───────────────────────────────────────────────────────────────────
 
-def score_result(result: dict, queries: list[str], space: Optional[str]) -> int:
-    """Score a result for relevance. Higher is better."""
+def score_result(
+    result: dict,
+    queries: list[str],
+    space: Optional[str],
+    *,
+    enhanced: bool = False,
+    halflife_days: Optional[int] = None,
+) -> int:
+    """Score a result for relevance. Higher is better.
+
+    With enhanced=True (ultra mode): title phrase weight 6, proximity bonus,
+    title-hit bonus, and optional recency decay.
+    """
     score = 0
     title_lower = result["title"].lower()
     excerpt_lower = result["excerpt"].lower()
+    title_phrase_weight = 6 if enhanced else 4
 
     for q in queries:
         q_lower = q.lower()
         if q_lower in title_lower:
-            score += 4
+            score += title_phrase_weight
         if q_lower in excerpt_lower:
             score += 2
 
-    for token in query_tokens(queries):
+    tokens = query_tokens(queries)
+    for token in tokens:
         if token_in_text(token, title_lower):
             score += 2
         if token_in_text(token, excerpt_lower):
             score += 1
 
+    if enhanced:
+        if len(tokens) >= 2:
+            score += _proximity_bonus(title_lower + " " + excerpt_lower, tokens)
+        if result.get("_title_hit"):
+            score += 3
+
     if space and result["space_key"].upper() == space.upper():
         score += 1
+
+    if enhanced and halflife_days and halflife_days > 0:
+        last_modified = result.get("last_modified")
+        if last_modified:
+            try:
+                mod_dt = datetime.fromisoformat(last_modified.replace("Z", "+00:00"))
+                days_ago = max(0, (datetime.now(tz=timezone.utc) - mod_dt).days)
+                score += int(10 * math.exp(-days_ago / halflife_days))
+            except (ValueError, TypeError):
+                pass
 
     return score
 
 
-def rank_results(results: list[dict], queries: list[str], space: Optional[str]) -> list[dict]:
+def rank_results(
+    results: list[dict],
+    queries: list[str],
+    space: Optional[str],
+    *,
+    enhanced: bool = False,
+    halflife_days: Optional[int] = None,
+) -> list[dict]:
     """Return results sorted by descending relevance score."""
-    scored = [(score_result(r, queries, space), r) for r in results]
+    scored = [
+        (score_result(r, queries, space, enhanced=enhanced, halflife_days=halflife_days), r)
+        for r in results
+    ]
     scored.sort(key=lambda x: x[0], reverse=True)
     ranked = [r for _, r in scored]
     logging.debug(f"Ranked {len(ranked)} results by relevance score")
@@ -395,8 +607,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum number of results (default: 5)",
     )
     parser.add_argument(
-        "--depth", choices=("links", "skim", "deep"), default="links",
-        help="Retrieval depth: links=title/URL/excerpt only, skim=top 1 page passages, deep=top 3 page passages (default: links)",
+        "--depth", choices=("links", "skim", "deep", "ultra"), default="links",
+        help="Retrieval depth: links=title/URL/excerpt only, skim=top 1 page passages, "
+             "deep=top 3 pages, ultra=5 pages + query expansion + cross-links (default: links)",
+    )
+    parser.add_argument(
+        "--recency-halflife-days", type=int, default=None, metavar="DAYS",
+        help="(ultra only) Boost recently modified pages; score decays by e^(-age/DAYS)",
     )
     parser.add_argument(
         "--body-top", type=int, default=None, metavar="N",
@@ -409,6 +626,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--json", action="store_true",
         help="Emit results as JSON instead of Markdown",
+    )
+    parser.add_argument(
+        "--workers", type=int, default=4, metavar="N",
+        help="Maximum parallel HTTP workers for page fetches (default: 4)",
     )
     parser.add_argument(
         "-v", "--verbose", action="store_true",
@@ -432,8 +653,25 @@ def main(argv: Optional[list[str]] = None) -> None:
     pat, base_url = load_config()
     adapter = ConfluenceAdapter(pat, base_url)
 
-    results = adapter.search(args.query, args.space, args.limit)
-    ranked = rank_results(results, args.query, args.space)
+    is_ultra = args.depth == "ultra"
+    active_queries = expand_queries(args.query) if is_ultra else args.query
+
+    try:
+        if is_ultra:
+            results = adapter.search_combined(active_queries, args.space, args.limit, workers=args.workers)
+            ranked = rank_results(
+                results, active_queries, args.space,
+                enhanced=True, halflife_days=args.recency_halflife_days,
+            )
+        else:
+            results = adapter.search(args.query, args.space, args.limit)
+            ranked = rank_results(results, args.query, args.space)
+    except ConfluenceAuthError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(EXIT_AUTH)
+    except ConfluenceNetworkError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(EXIT_NETWORK)
 
     if not ranked:
         print("No results found.")
@@ -441,20 +679,61 @@ def main(argv: Optional[list[str]] = None) -> None:
 
     if not args.json:
         print(f"# Wiki results for {', '.join(repr(q) for q in args.query)}\n")
-    body_by_id = {}
+
+    body_by_id: dict[str, dict] = {}
     body_top, body_chars = resolve_body_options(args.depth, args.body_top, args.body_chars)
+
     if body_top and body_chars:
+        ids_to_fetch = [r["id"] for r in ranked[:body_top]]
+        pages_by_id = adapter.get_pages(ids_to_fetch, workers=args.workers)
+
         for result in ranked[:body_top]:
-            page = adapter.get_page(result["id"])
+            page = pages_by_id.get(result["id"])
             if page and page["body_html"]:
                 body_by_id[result["id"]] = {
                     "headings": extract_headings(page["body_html"])[:8],
                     "passages": extract_relevant_passages(
                         page["body_html"],
-                        args.query,
+                        active_queries,
                         max_chars=body_chars,
                     ),
                 }
+
+        if is_ultra:
+            seen_ids = {r["id"] for r in ranked}
+            cross_ids: list[str] = []
+            for result in ranked[:body_top]:
+                page = pages_by_id.get(result["id"])
+                if page and page["body_html"]:
+                    for link_id in extract_cross_links(page["body_html"]):
+                        if link_id not in seen_ids and len(cross_ids) < ULTRA_CROSSLINK_EXTRA:
+                            cross_ids.append(link_id)
+                            seen_ids.add(link_id)
+
+            if cross_ids:
+                extra_pages = adapter.get_pages(cross_ids, workers=args.workers)
+                for pid, xpage in extra_pages.items():
+                    ranked.append({
+                        "id": pid,
+                        "title": xpage.get("title", ""),
+                        "space_key": xpage.get("space_key", ""),
+                        "space_name": "",
+                        "url": f"{base_url}/pages/{pid}",
+                        "excerpt": "",
+                        "last_modified": "",
+                        "_title_hit": False,
+                        "source": "cross-link",
+                    })
+                    if xpage.get("body_html"):
+                        body_by_id[pid] = {
+                            "headings": extract_headings(xpage["body_html"])[:8],
+                            "passages": extract_relevant_passages(
+                                xpage["body_html"],
+                                active_queries,
+                                max_chars=body_chars,
+                            ),
+                        }
+
         logging.debug(f"Extracted body passages from {len(body_by_id)} pages")
 
     if args.json:
@@ -471,6 +750,7 @@ def main(argv: Optional[list[str]] = None) -> None:
                     "space_key": r["space_key"],
                     "space_name": r["space_name"],
                     "excerpt": r["excerpt"],
+                    **({"source": r["source"]} if r.get("source") else {}),
                     **(body_by_id.get(r["id"], {})),
                 }
                 for i, r in enumerate(ranked)
