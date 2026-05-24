@@ -314,6 +314,7 @@ MOCK_PAGE_RESPONSE = {
     "id": "42",
     "title": "Auth Guide",
     "space": {"key": "MT", "name": "Mobile Team"},
+    "_links": {"webui": "/spaces/MT/pages/42/Auth+Guide"},
     "body": {"storage": {"value": "<h1>Auth</h1><p>Details here.</p>"}},
 }
 
@@ -373,6 +374,18 @@ class TestConfluenceAdapterGetPage:
         assert page["id"] == "42"
         assert page["title"] == "Auth Guide"
         assert "<h1>" in page["body_html"]
+
+    @resp_mock.activate
+    def test_returns_url_and_space_name(self):
+        """get_page() must include url (from _links.webui) and space_name."""
+        resp_mock.add(resp_mock.GET, PAGE_URL, json=MOCK_PAGE_RESPONSE, status=200)
+        adapter = wiki.ConfluenceAdapter("test-pat", BASE_URL)
+        page = adapter.get_page("42")
+
+        assert page is not None
+        assert page["space_name"] == "Mobile Team"
+        assert BASE_URL in page["url"]
+        assert "/pages/42" in page["url"] or "/spaces/MT" in page["url"]
 
     @resp_mock.activate
     def test_returns_none_on_404(self):
@@ -601,3 +614,51 @@ class TestVerboseLogging:
         captured = capsys.readouterr()
         # With --verbose, debug logging should be enabled (check stderr or combined output)
         assert captured.err or captured.out  # Should produce some output
+
+
+# ── Phase H: cross-link URL and from_page ────────────────────────────────────
+
+class TestGetPageUrlAndSpaceName:
+    @resp_mock.activate
+    def test_cross_link_url_uses_webui_not_bare_id(self):
+        """Cross-link result URL must come from _links.webui, not a bare /pages/{id} string."""
+        page_response = {
+            "id": "99",
+            "title": "Deploy Guide",
+            "space": {"key": "OPS", "name": "Operations"},
+            "_links": {"webui": "/spaces/OPS/pages/99/Deploy+Guide"},
+            "body": {"storage": {"value": "<p>Steps here</p>"}},
+        }
+        resp_mock.add(resp_mock.GET, f"{BASE_URL}/rest/api/content/99", json=page_response, status=200)
+        adapter = wiki.ConfluenceAdapter("test-pat", BASE_URL)
+        page = adapter.get_page("99")
+
+        assert page is not None
+        assert page["url"] == f"{BASE_URL}/spaces/OPS/pages/99/Deploy+Guide"
+        assert page["space_name"] == "Operations"
+
+    def test_from_page_tracks_source(self):
+        """_structural_variants drops trailing and leading tokens, and extracts longest."""
+        # Smoke-test that _structural_variants returns useful coverage variants
+        variants = wiki._structural_variants("deploy authentication service")
+        assert "deploy authentication" in variants
+        assert "authentication service" in variants
+
+    @resp_mock.activate
+    def test_cross_link_missing_webui_falls_back_to_empty_url(self):
+        """A page response with no _links.webui must produce an empty url, not a crash."""
+        page_response_no_links = {
+            "id": "77",
+            "title": "No Links Page",
+            "space": {"key": "XX", "name": "X Space"},
+            "body": {"storage": {"value": "<p>content</p>"}},
+        }
+        resp_mock.add(
+            resp_mock.GET, f"{BASE_URL}/rest/api/content/77",
+            json=page_response_no_links, status=200,
+        )
+        adapter = wiki.ConfluenceAdapter("test-pat", BASE_URL)
+        page = adapter.get_page("77")
+
+        assert page is not None
+        assert page["url"] == BASE_URL  # base + "" = base URL

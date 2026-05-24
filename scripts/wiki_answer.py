@@ -463,6 +463,8 @@ class ConfluenceAdapter:
             "id": item.get("id"),
             "title": item.get("title", ""),
             "space_key": item.get("space", {}).get("key", ""),
+            "space_name": item.get("space", {}).get("name", ""),
+            "url": f"{self._base_url}{item.get('_links', {}).get('webui', '')}",
             "body_html": item.get("body", {}).get("storage", {}).get("value", ""),
         }
         self._page_cache[page_id] = result
@@ -756,28 +758,31 @@ def main(argv: Optional[list[str]] = None) -> None:
 
         if is_ultra:
             seen_ids = {r["id"] for r in ranked}
-            cross_ids: list[str] = []
+            cross_pairs: list[tuple[str, str]] = []  # (link_id, from_page_id)
             for result in ranked[:body_top]:
                 page = pages_by_id.get(result["id"])
                 if page and page["body_html"]:
                     for link_id in extract_cross_links(page["body_html"]):
-                        if link_id not in seen_ids and len(cross_ids) < ULTRA_CROSSLINK_EXTRA:
-                            cross_ids.append(link_id)
+                        if link_id not in seen_ids and len(cross_pairs) < ULTRA_CROSSLINK_EXTRA:
+                            cross_pairs.append((link_id, result["id"]))
                             seen_ids.add(link_id)
 
-            if cross_ids:
+            if cross_pairs:
+                cross_ids = [pid for pid, _ in cross_pairs]
+                from_page_map = {pid: src for pid, src in cross_pairs}
                 extra_pages = adapter.get_pages(cross_ids, workers=args.workers)
                 for pid, xpage in extra_pages.items():
                     ranked.append({
                         "id": pid,
                         "title": xpage.get("title", ""),
                         "space_key": xpage.get("space_key", ""),
-                        "space_name": "",
-                        "url": f"{base_url}/pages/{pid}",
+                        "space_name": xpage.get("space_name", ""),
+                        "url": xpage.get("url", ""),
                         "excerpt": "",
                         "last_modified": "",
                         "_title_hit": False,
                         "source": "cross-link",
+                        "from_page": from_page_map.get(pid, ""),
                     })
                     if xpage.get("body_html"):
                         body_by_id[pid] = {
