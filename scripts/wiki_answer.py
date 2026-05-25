@@ -329,7 +329,12 @@ _CROSS_LINK_RE = re.compile(r"/pages/(\d+)(?:/|$|\?|#)")
 
 
 def extract_cross_links(html: str) -> list[str]:
-    """Return Confluence page IDs found in internal links within page HTML."""
+    """Return Confluence page IDs found in modern internal page links.
+
+    Supports both Server/Data Center ``/pages/{id}`` and Cloud
+    ``/wiki/spaces/{space}/pages/{id}`` URL shapes. Legacy ``/display`` links
+    do not contain page IDs, so they are intentionally ignored.
+    """
     soup = BeautifulSoup(html, "html.parser")
     page_ids: list[str] = []
     seen: set[str] = set()
@@ -361,6 +366,17 @@ def token_in_text(token: str, text: str) -> bool:
     if len(token) <= 3:
         return re.search(rf"(?<![A-Za-z0-9]){re.escape(token)}(?![A-Za-z0-9])", text) is not None
     return token in text
+
+
+def page_url(base_url: str, page_id: Optional[str], webui: str = "") -> str:
+    """Return a usable Confluence page URL, falling back to a page-id lookup URL."""
+    if webui:
+        if webui.startswith(("http://", "https://")):
+            return webui
+        return f"{base_url}{webui}"
+    if page_id:
+        return f"{base_url}/pages/viewpage.action?pageId={page_id}"
+    return base_url
 
 
 # ── Confluence adapter ────────────────────────────────────────────────────────
@@ -418,12 +434,13 @@ class ConfluenceAdapter:
 
         results = []
         for item in data.get("results", []):
+            page_id = item.get("id")
             results.append({
-                "id": item.get("id"),
+                "id": page_id,
                 "title": item.get("title", ""),
                 "space_key": item.get("space", {}).get("key", ""),
                 "space_name": item.get("space", {}).get("name", ""),
-                "url": f"{self._base_url}{item.get('_links', {}).get('webui', '')}",
+                "url": page_url(self._base_url, page_id, item.get("_links", {}).get("webui", "")),
                 "excerpt": strip_highlight_markers(item.get("excerpt", "")),
                 "last_modified": item.get("version", {}).get("when", ""),
                 "_title_hit": False,
@@ -459,12 +476,13 @@ class ConfluenceAdapter:
 
         item = response.json()
         logging.debug(f"Fetched page {page_id}: {item.get('title', 'untitled')}")
+        result_id = item.get("id") or page_id
         result = {
-            "id": item.get("id"),
+            "id": result_id,
             "title": item.get("title", ""),
             "space_key": item.get("space", {}).get("key", ""),
             "space_name": item.get("space", {}).get("name", ""),
-            "url": f"{self._base_url}{item.get('_links', {}).get('webui', '')}",
+            "url": page_url(self._base_url, result_id, item.get("_links", {}).get("webui", "")),
             "body_html": item.get("body", {}).get("storage", {}).get("value", ""),
         }
         self._page_cache[page_id] = result
@@ -513,7 +531,11 @@ class ConfluenceAdapter:
                             "title": item.get("title", ""),
                             "space_key": item.get("space", {}).get("key", ""),
                             "space_name": item.get("space", {}).get("name", ""),
-                            "url": f"{self._base_url}{item.get('_links', {}).get('webui', '')}",
+                            "url": page_url(
+                                self._base_url,
+                                item.get("id"),
+                                item.get("_links", {}).get("webui", ""),
+                            ),
                             "excerpt": strip_highlight_markers(item.get("excerpt", "")),
                             "last_modified": item.get("version", {}).get("when", ""),
                             "_title_hit": True,
@@ -606,7 +628,11 @@ def score_result(
                 days_ago = max(0, (datetime.now(tz=timezone.utc) - mod_dt).days)
                 score = round(score * math.exp(-days_ago / halflife_days))
             except (ValueError, TypeError):
-                pass
+                logging.debug(
+                    "recency parse failed for %s: %r",
+                    result.get("id"),
+                    last_modified,
+                )
 
     return score
 
@@ -620,12 +646,24 @@ def rank_results(
     halflife_days: Optional[int] = None,
 ) -> list[dict]:
     """Return results sorted by descending relevance score."""
-    scored = [
-        (score_result(r, queries, space, enhanced=enhanced, halflife_days=halflife_days), r)
-        for r in results
-    ]
-    scored.sort(key=lambda x: x[0], reverse=True)
-    ranked = [r for _, r in scored]
+    if enhanced and halflife_days and halflife_days > 0:
+        scored = [
+            (
+                score_result(r, queries, space, enhanced=enhanced),
+                score_result(r, queries, space, enhanced=enhanced, halflife_days=halflife_days),
+                r,
+            )
+            for r in results
+        ]
+        scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        ranked = [r for _, _, r in scored]
+    else:
+        scored = [
+            (score_result(r, queries, space, enhanced=enhanced), r)
+            for r in results
+        ]
+        scored.sort(key=lambda x: x[0], reverse=True)
+        ranked = [r for _, r in scored]
     logging.debug(f"Ranked {len(ranked)} results by relevance score")
     return ranked
 
@@ -670,7 +708,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--recency-halflife-days", type=int, default=None, metavar="DAYS",
-        help="(ultra only) Boost recently modified pages; score decays by e^(-age/DAYS)",
+        help="(ultra only) Use recency decay as a tie-breaker: score *= e^(-age/DAYS)",
+    )
+    parser.add_argument(
+        "--legacy-scorer", action="store_true",
+        help="Use the pre-ultra ranking formula, even with --depth ultra",
     )
     parser.add_argument(
         "--body-top", type=int, default=None, metavar="N",
@@ -716,9 +758,12 @@ def main(argv: Optional[list[str]] = None) -> None:
     try:
         if is_ultra:
             results = adapter.search_combined(active_queries, args.space, args.limit, workers=args.workers)
+            enhanced = not args.legacy_scorer
+            scoring_queries = active_queries if enhanced else args.query
             ranked = rank_results(
-                results, active_queries, args.space,
-                enhanced=True, halflife_days=args.recency_halflife_days,
+                results, scoring_queries, args.space,
+                enhanced=enhanced,
+                halflife_days=args.recency_halflife_days if enhanced else None,
             )
         else:
             results = adapter.search(args.query, args.space, args.limit)
@@ -758,18 +803,19 @@ def main(argv: Optional[list[str]] = None) -> None:
 
         if is_ultra:
             seen_ids = {r["id"] for r in ranked}
-            cross_pairs: list[tuple[str, str]] = []  # (link_id, from_page_id)
+            cross_pairs: list[tuple[str, str, str]] = []  # (link_id, from_page_id, from_page_url)
             for result in ranked[:body_top]:
                 page = pages_by_id.get(result["id"])
                 if page and page["body_html"]:
                     for link_id in extract_cross_links(page["body_html"]):
                         if link_id not in seen_ids and len(cross_pairs) < ULTRA_CROSSLINK_EXTRA:
-                            cross_pairs.append((link_id, result["id"]))
+                            cross_pairs.append((link_id, result["id"], result["url"]))
                             seen_ids.add(link_id)
 
             if cross_pairs:
-                cross_ids = [pid for pid, _ in cross_pairs]
-                from_page_map = {pid: src for pid, src in cross_pairs}
+                cross_ids = [pid for pid, _, _ in cross_pairs]
+                from_page_map = {pid: src for pid, src, _ in cross_pairs}
+                from_page_url_map = {pid: src_url for pid, _, src_url in cross_pairs}
                 extra_pages = adapter.get_pages(cross_ids, workers=args.workers)
                 for pid, xpage in extra_pages.items():
                     ranked.append({
@@ -783,6 +829,7 @@ def main(argv: Optional[list[str]] = None) -> None:
                         "_title_hit": False,
                         "source": "cross-link",
                         "from_page": from_page_map.get(pid, ""),
+                        "from_page_url": from_page_url_map.get(pid, ""),
                     })
                     if xpage.get("body_html"):
                         body_by_id[pid] = {
@@ -811,6 +858,8 @@ def main(argv: Optional[list[str]] = None) -> None:
                     "space_name": r["space_name"],
                     "excerpt": r["excerpt"],
                     **({"source": r["source"]} if r.get("source") else {}),
+                    **({"from_page": r["from_page"]} if r.get("from_page") else {}),
+                    **({"from_page_url": r["from_page_url"]} if r.get("from_page_url") else {}),
                     **(body_by_id.get(r["id"], {})),
                 }
                 for i, r in enumerate(ranked)
@@ -819,10 +868,20 @@ def main(argv: Optional[list[str]] = None) -> None:
         print(json.dumps(payload, indent=2, ensure_ascii=False))
         sys.exit(EXIT_OK)
 
+    title_by_id = {r["id"]: r["title"] for r in ranked}
+
     for i, r in enumerate(ranked, 1):
         print(f"## {i}. {r['title']}")
         print(f"- **Space:** {r['space_name']} (`{r['space_key']}`)")
         print(f"- **URL:** {r['url']}")
+        if r.get("source") == "cross-link":
+            from_page = r.get("from_page", "")
+            from_title = title_by_id.get(from_page, from_page)
+            from_url = r.get("from_page_url", "")
+            if from_url:
+                print(f"- **Source:** Cross-link from {from_title} ({from_url})")
+            else:
+                print(f"- **Source:** Cross-link from {from_title}")
         if r["excerpt"]:
             print(f"- **Excerpt:** {r['excerpt'][:200]}")
         body = body_by_id.get(r["id"])

@@ -66,6 +66,7 @@ Ask questions with **wiki-related keywords**:
 | "Show me..." | "Show me the setup steps" | ✅ Yes |
 | "Explain..." | "Explain our API rate limits" | ✅ Yes |
 | "According to..." | "According to the docs, how do we...?" | ✅ Yes |
+| "Ultra search..." | "Ultra search the wiki for release approvals" | ✅ Yes |
 
 **How it works:**
 1. You ask a question in `copilot`
@@ -168,6 +169,14 @@ copilot -p "Where is the deployment guide?" --allow-all
 ### No results returned
 - **Cause:** Query term doesn't exist in Confluence
 - **Fix:** Verify page exists manually, try broader search term
+
+### Need more complete results
+- **Cause:** Default search returns links and excerpts only
+- **Fix:** Ask for "deep search" or "ultra search"; ultra mode uses expanded queries, title search, and cross-linked pages
+
+### Search is slow or rate-limited
+- **Cause:** Deep and ultra modes fetch page bodies
+- **Fix:** Run the direct CLI with `--workers 2` and `--verbose` to reduce concurrency and inspect request diagnostics
 
 ### Skill loaded but never offered
 - **Cause:** Questions not wiki-related enough

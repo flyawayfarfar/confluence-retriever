@@ -58,7 +58,7 @@ The CLI reads both at startup via `python-dotenv`. Missing either causes exit co
 **Script:** `scripts/wiki_answer.py`
 
 ```bash
-python3 scripts/wiki_answer.py --query "TERM" [--query "TERM2"] [--space KEY] [--limit N] [--depth links|skim|deep]
+python3 scripts/wiki_answer.py --query "TERM" [--query "TERM2"] [--space KEY] [--limit N] [--depth links|skim|deep|ultra]
 ```
 
 | Flag | Default | Purpose |
@@ -69,6 +69,10 @@ python3 scripts/wiki_answer.py --query "TERM" [--query "TERM2"] [--space KEY] [-
 | `--depth links` | `links` | Title, URL, and excerpt only |
 | `--depth skim` | `links` | Fetch capped query-relevant passages from the top ranked page |
 | `--depth deep` | `links` | Fetch larger passage budgets from the top three ranked pages |
+| `--depth ultra` | `links` | Expanded title+text search, five page bodies, and up to two cross-linked pages |
+| `--workers N` | 4 | Maximum parallel HTTP workers for page fetches |
+| `--recency-halflife-days DAYS` | none | Ultra-only recency tie-breaker |
+| `--legacy-scorer` | off | Use pre-ultra ranking with `--depth ultra` |
 | `--body-top N` | by depth | Override number of pages to fetch bodies for |
 | `--body-chars N` | by depth | Override max passage characters per page |
 | `--json` | off | Emit results as JSON instead of Markdown |
@@ -92,7 +96,7 @@ argparse, PAT/URL loader, exit codes, basic structure.
 
 ### Phase 2 — Confluence Adapter ✓
 - `ConfluenceAdapter.search()` — CQL search, response normalisation
-- `ConfluenceAdapter.get_page()` — optional page body fetch for `--depth skim` / `--depth deep`
+- `ConfluenceAdapter.get_page()` — optional page body fetch for `--depth skim`, `--depth deep`, and `--depth ultra`
 - `build_cql()` — CQL builder with escaping and `type = "page"` filtering
 - `strip_highlight_markers()` — removes `@@@hl@@@` / `@@@endhl@@@` markers from excerpts
 
@@ -157,20 +161,23 @@ By default, the CLI does a single search call and returns ranked excerpts. Retri
 | `links` | Search only; title, URL, excerpt | Lowest |
 | `skim` | Search plus top 1 page with capped relevant passages | Moderate |
 | `deep` | Search plus top 3 pages with larger passage budgets | Highest |
+| `ultra` | Expanded text/title search plus top 5 pages and up to 2 cross-linked pages | Highest API cost, best recall |
 
 Body retrieval performs a bounded skim pass:
 
 1. **Search pass** — run CQL search, get ranked excerpt list (current behaviour)
 2. **Skim pass** — for the top N ranked results, fetch page bodies with `--body-top N`
 3. **Passage selection** — score page text blocks against query phrases and tokens, then emit the best passages under `--body-chars`
-4. **Synthesis** — host AI uses headings and capped relevant passages to answer without dumping whole pages
+4. **Ultra cross-link pass** — in ultra mode only, append up to two first-seen linked pages not already ranked
+5. **Synthesis** — host AI uses headings and capped relevant passages to answer without dumping whole pages
 
 Prompt mapping for assistant skills:
 - `links`: "find", "search", "where is", "link to", "docs for", "quick answer", "just the link"
 - `skim`: "how do I", "show steps", "read the page", "according to the docs", "setup", "configure", "troubleshoot", "API usage"
-- `deep`: "deep search", "verify", "compare pages", "source of truth", "exact wording", "think harder", "ultrathink", "be thorough"
+- `deep`: "deep search", "verify", "compare pages", "source of truth", "exact wording", "think harder", "be thorough"
+- `ultra`: "ultra search", "research mode", "exhaustive", "leave no stone unturned", "ultrathink the wiki"
 
-The main cost is latency (one extra API call per page fetched) and token cost. Defaults are no body text for `links`, 1 page with up to 1200 relevant passage characters for `skim`, and 3 pages with up to 2000 relevant passage characters each for `deep`.
+The main cost is latency (one extra API call per page fetched) and token cost. Defaults are no body text for `links`, 1 page with up to 1200 relevant passage characters for `skim`, 3 pages with up to 2000 relevant passage characters each for `deep`, and 5 pages with up to 3000 relevant passage characters each plus up to 2 cross-linked pages for `ultra`.
 
 ```bash
 python3 scripts/wiki_answer.py --query "release process" --depth skim
@@ -180,4 +187,4 @@ This keeps the dumb-retriever contract — the CLI still returns text, the host 
 
 ### Precision Fixtures
 
-A `precision-fixtures.json` with 10 known query → expected page-id pairs would let you measure retrieval quality without an LLM. This file would live under a `fixtures/` directory (not yet created); would be a useful regression guard after any ranking changes.
+A future precision corpus with 10 known query to expected page-id pairs would let you measure retrieval quality without an LLM. Keep it outside the committed tree until it contains real, sanitized examples.

@@ -6,6 +6,7 @@ xfail tests document current bugs that become fixed in later phases.
 
 import pytest
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
@@ -116,12 +117,12 @@ class TestRecencyPhaseI:
         zero_relevance_fresh = _result(
             title="weekly meeting notes",
             excerpt="standup summary",
-            last_modified="2026-05-24T00:00:00Z",  # today
+            last_modified=datetime.now(timezone.utc).isoformat(),
         )
         medium_relevance_old = _result(
             title="authentication guide",
             excerpt="auth setup steps",
-            last_modified="2026-03-25T00:00:00Z",  # ~60 days ago
+            last_modified=(datetime.now(timezone.utc) - timedelta(days=60)).isoformat(),
         )
         z = wiki.score_result(zero_relevance_fresh, ["authentication"], None,
                                enhanced=True, halflife_days=30)
@@ -145,3 +146,12 @@ class TestRecencyPhaseI:
         no_recency = wiki.score_result(r, q, None, enhanced=True, halflife_days=None)
         huge_halflife = wiki.score_result(r, q, None, enhanced=True, halflife_days=9999999)
         assert no_recency == huge_halflife
+
+    def test_legacy_scorer_recovers_non_enhanced_score(self):
+        r = _result(title="authentication guide", title_hit=True, last_modified=datetime.now(timezone.utc).isoformat())
+        q = ["authentication"]
+
+        legacy = wiki.score_result(r, q, None, enhanced=False)
+        ultra_rollback = wiki.score_result(r, q, None, enhanced=False, halflife_days=None)
+
+        assert ultra_rollback == legacy

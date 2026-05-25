@@ -122,6 +122,7 @@ python3 scripts/wiki_answer.py --query "auth" --query "API" --space MT --limit 1
 | `--depth links` (default) | 1 search | No | Quick finding — "where is the page?" |
 | `--depth skim` | 1 search + 1 body fetch | 1 page, capped 1200 relevant passage chars | "How do I...?" steps and details |
 | `--depth deep` | 1 search + 3 body fetches | 3 pages, 2000 relevant passage chars each | Deep verification, compare pages |
+| `--depth ultra` | 2 searches + 5-7 body fetches | 5 pages plus up to 2 cross-linked pages | Exhaustive research, expanded queries, title matches |
 
 Override body fetch count and character limits:
 ```bash
@@ -192,7 +193,7 @@ class TestSomethingNew:
 1. Modify `html_to_text()` or `extract_headings()` or create new helpers
 2. Add tests to `TestHtmlToText` or `TestExtractHeadings`
 3. Consider HTML injection and whitespace edge cases
-4. Test with real Confluence page HTML (sample fixtures available in `tests/`)
+4. Test with representative Confluence page HTML embedded directly in tests
 
 ### Modifying Ranking
 

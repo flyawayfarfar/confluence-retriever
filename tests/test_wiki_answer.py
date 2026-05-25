@@ -2,6 +2,7 @@
 
 import json
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -195,6 +196,23 @@ class TestQueryTokens:
         assert wiki.token_in_text("auth", "authentication guide")
 
 
+class TestPageUrl:
+    def test_uses_relative_webui_path(self):
+        assert wiki.page_url(BASE_URL, "42", "/spaces/MT/pages/42/Auth") == (
+            f"{BASE_URL}/spaces/MT/pages/42/Auth"
+        )
+
+    def test_uses_absolute_webui_path(self):
+        assert wiki.page_url(BASE_URL, "42", "https://other.example.com/pages/42") == (
+            "https://other.example.com/pages/42"
+        )
+
+    def test_falls_back_to_page_id_lookup_url(self):
+        assert wiki.page_url(BASE_URL, "42") == (
+            f"{BASE_URL}/pages/viewpage.action?pageId=42"
+        )
+
+
 class TestExpandQueries:
     def test_includes_original_query(self):
         assert "auth guide" in wiki.expand_queries(["auth guide"])
@@ -254,6 +272,64 @@ class TestScoreResult:
     def test_case_insensitive(self):
         r = _make_result(title="Authentication Guide")
         assert wiki.score_result(r, ["authentication"], None) == 6
+
+    def test_recency_multiplicative_decays_old_pages(self):
+        r = {
+            **_make_result(title="authentication guide"),
+            "last_modified": (datetime.now(timezone.utc) - timedelta(days=30)).isoformat(),
+        }
+        no_recency = wiki.score_result(r, ["authentication"], None, enhanced=True)
+        with_recency = wiki.score_result(
+            r,
+            ["authentication"],
+            None,
+            enhanced=True,
+            halflife_days=30,
+        )
+
+        assert with_recency < no_recency
+
+    def test_recency_does_not_invert_relevance_order(self):
+        lower_relevance_fresh = {
+            **_make_result(excerpt="authentication weekly notes"),
+            "last_modified": datetime.now(timezone.utc).isoformat(),
+        }
+        higher_relevance_old = {
+            **_make_result(title="authentication guide"),
+            "last_modified": (datetime.now(timezone.utc) - timedelta(days=3650)).isoformat(),
+        }
+
+        ranked = wiki.rank_results(
+            [lower_relevance_fresh, higher_relevance_old],
+            ["authentication"],
+            None,
+            enhanced=True,
+            halflife_days=30,
+        )
+
+        assert ranked[0]["title"] == "authentication guide"
+
+    def test_recency_breaks_ties_only(self):
+        fresh = {
+            **_make_result(title="authentication guide"),
+            "id": "fresh",
+            "last_modified": datetime.now(timezone.utc).isoformat(),
+        }
+        old = {
+            **_make_result(title="authentication guide"),
+            "id": "old",
+            "last_modified": (datetime.now(timezone.utc) - timedelta(days=365)).isoformat(),
+        }
+
+        ranked = wiki.rank_results(
+            [old, fresh],
+            ["authentication"],
+            None,
+            enhanced=True,
+            halflife_days=30,
+        )
+
+        assert [r["id"] for r in ranked] == ["fresh", "old"]
 
 
 class TestRankResults:
@@ -362,6 +438,25 @@ class TestConfluenceAdapterSearch:
         with pytest.raises(wiki.ConfluenceNetworkError):
             adapter.search(["q"], None, 5)
 
+    @resp_mock.activate
+    def test_search_result_without_webui_gets_page_id_url(self):
+        response = {
+            "results": [
+                {
+                    "id": "77",
+                    "title": "No Webui",
+                    "space": {"key": "MT", "name": "Mobile Team"},
+                    "excerpt": "",
+                }
+            ]
+        }
+        resp_mock.add(resp_mock.GET, SEARCH_URL, json=response, status=200)
+        adapter = wiki.ConfluenceAdapter("test-pat", BASE_URL)
+
+        result = adapter.search(["auth"], None, 5)[0]
+
+        assert result["url"] == f"{BASE_URL}/pages/viewpage.action?pageId=77"
+
 
 class TestConfluenceAdapterGetPage:
     @resp_mock.activate
@@ -458,6 +553,11 @@ class TestTypedExceptions:
         parser = wiki.build_parser()
         args = parser.parse_args(["--query", "q"])
         assert args.workers == 4
+
+    def test_legacy_scorer_flag_accepted_by_parser(self):
+        parser = wiki.build_parser()
+        args = parser.parse_args(["--query", "q", "--depth", "ultra", "--legacy-scorer"])
+        assert args.legacy_scorer is True
 
 
 # ── search_combined ───────────────────────────────────────────────────────────
@@ -645,8 +745,8 @@ class TestGetPageUrlAndSpaceName:
         assert "authentication service" in variants
 
     @resp_mock.activate
-    def test_cross_link_missing_webui_falls_back_to_empty_url(self):
-        """A page response with no _links.webui must produce an empty url, not a crash."""
+    def test_cross_link_missing_webui_falls_back_to_page_id_url(self):
+        """A page response with no _links.webui must still produce a usable URL."""
         page_response_no_links = {
             "id": "77",
             "title": "No Links Page",
@@ -661,7 +761,7 @@ class TestGetPageUrlAndSpaceName:
         page = adapter.get_page("77")
 
         assert page is not None
-        assert page["url"] == BASE_URL  # base + "" = base URL
+        assert page["url"] == f"{BASE_URL}/pages/viewpage.action?pageId=77"
 
 
 # ── Phase J: --depth ultra end-to-end ────────────────────────────────────────
@@ -725,3 +825,78 @@ class TestUltraDepthE2E:
             pass
         help_text = buf.getvalue()
         assert "--workers" in help_text
+
+    @resp_mock.activate
+    def test_ultra_json_cross_link_includes_source_and_from_page(self, capsys, monkeypatch, tmp_path):
+        env_file = tmp_path / "test.env"
+        env_file.write_text(f"CONFLUENCE_URL={BASE_URL}\nCONFLUENCE_PAT=test-pat\n")
+        monkeypatch.setattr(wiki, "PROJECT_ENV_FILE", env_file)
+
+        root_page = {
+            **MOCK_PAGE_RESPONSE,
+            "body": {
+                "storage": {
+                    "value": '<p>Authentication details <a href="/wiki/spaces/OPS/pages/99/Deploy">Deploy</a></p>'
+                }
+            },
+        }
+        linked_page = {
+            "id": "99",
+            "title": "Deploy Guide",
+            "space": {"key": "OPS", "name": "Operations"},
+            "_links": {"webui": "/spaces/OPS/pages/99/Deploy+Guide"},
+            "body": {"storage": {"value": "<p>Linked deployment details.</p>"}},
+        }
+
+        resp_mock.add(resp_mock.GET, SEARCH_URL, json=MOCK_SEARCH_RESPONSE, status=200)
+        resp_mock.add(resp_mock.GET, SEARCH_URL, json=MOCK_SEARCH_RESPONSE, status=200)
+        resp_mock.add(resp_mock.GET, PAGE_URL, json=root_page, status=200)
+        resp_mock.add(resp_mock.GET, f"{BASE_URL}/rest/api/content/99", json=linked_page, status=200)
+
+        with pytest.raises(SystemExit) as exc:
+            wiki.main(["--query", "auth", "--depth", "ultra", "--json"])
+        assert exc.value.code == wiki.EXIT_OK
+
+        output = json.loads(capsys.readouterr().out)
+        cross_link = next(r for r in output["results"] if r.get("source") == "cross-link")
+        assert cross_link["id"] == "99"
+        assert cross_link["from_page"] == "42"
+        assert cross_link["from_page_url"] == f"{BASE_URL}/spaces/MT/pages/42/Auth+Guide"
+
+    @resp_mock.activate
+    def test_ultra_markdown_labels_cross_link_source(self, capsys, monkeypatch, tmp_path):
+        env_file = tmp_path / "test.env"
+        env_file.write_text(f"CONFLUENCE_URL={BASE_URL}\nCONFLUENCE_PAT=test-pat\n")
+        monkeypatch.setattr(wiki, "PROJECT_ENV_FILE", env_file)
+
+        root_page = {
+            **MOCK_PAGE_RESPONSE,
+            "body": {
+                "storage": {
+                    "value": '<p>Authentication details <a href="/wiki/spaces/OPS/pages/99/Deploy">Deploy</a></p>'
+                }
+            },
+        }
+        linked_page = {
+            "id": "99",
+            "title": "Deploy Guide",
+            "space": {"key": "OPS", "name": "Operations"},
+            "_links": {"webui": "/spaces/OPS/pages/99/Deploy+Guide"},
+            "body": {"storage": {"value": "<p>Linked deployment details.</p>"}},
+        }
+
+        resp_mock.add(resp_mock.GET, SEARCH_URL, json=MOCK_SEARCH_RESPONSE, status=200)
+        resp_mock.add(resp_mock.GET, SEARCH_URL, json=MOCK_SEARCH_RESPONSE, status=200)
+        resp_mock.add(resp_mock.GET, PAGE_URL, json=root_page, status=200)
+        resp_mock.add(resp_mock.GET, f"{BASE_URL}/rest/api/content/99", json=linked_page, status=200)
+
+        with pytest.raises(SystemExit) as exc:
+            wiki.main(["--query", "auth", "--depth", "ultra"])
+        assert exc.value.code == wiki.EXIT_OK
+
+        output = capsys.readouterr().out
+        assert "- **URL:** https://wiki.example.com/spaces/OPS/pages/99/Deploy+Guide" in output
+        assert (
+            "- **Source:** Cross-link from Auth Guide "
+            "(https://wiki.example.com/spaces/MT/pages/42/Auth+Guide)"
+        ) in output

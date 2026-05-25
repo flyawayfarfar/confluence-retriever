@@ -41,7 +41,8 @@ Default to `--depth links` unless the user's wording asks for more detail.
 |-------|------------------------|----------|
 | `links` | "find", "search", "where is", "link to", "docs for", "page about", "quick answer", "just the link", "top result" | One search request; title, URL, and excerpt only |
 | `skim` | "how do I", "how does", "what are the steps", "show me the steps", "summarise the page", "read the page", "according to the docs", "explain", "details", "setup", "configure", "troubleshoot", "error", "API usage", "example command" | Fetch capped query-relevant passages from the top ranked page |
-| `deep` | "deep search", "look deeper", "verify", "double check", "cross-check", "compare pages", "check multiple pages", "source of truth", "exact wording", "policy wording", "think harder", "ultrathink", "be thorough", "investigate", "I need confidence", "don't just give the top result" | Fetch larger passage budgets from the top three ranked pages |
+| `deep` | "deep search", "look deeper", "verify", "double check", "cross-check", "compare pages", "check multiple pages", "source of truth", "exact wording", "policy wording", "think harder", "be thorough", "investigate", "I need confidence", "don't just give the top result" | Fetch larger passage budgets from the top three ranked pages |
+| `ultra` | "ultra search", "research mode", "exhaustive", "leave no stone unturned", "ultrathink", "ultrathink the wiki" | Expanded title+text search, top five page bodies, and up to two first-seen cross-linked pages |
 
 Do not send trigger phrases such as "think harder" to Confluence as query text. Interpret them as depth instructions, then extract the actual wiki search terms separately.
 
@@ -69,10 +70,13 @@ python3 <PROJECT_ROOT>/scripts/wiki_answer.py \
 
 Use `--depth deep` only when the user explicitly asks for verification, comparison, source-of-truth confidence, exact wording, or deeper investigation.
 
+Use `--depth ultra` only when the user explicitly asks for exhaustive wiki research. Ultra mode costs more API calls: two search calls plus five to seven body fetches.
+
 ### Step 4 — Synthesize
 
 Read the returned markdown and compose a direct answer:
-- Cite the most relevant result(s) by title and URL
+- Cite the most relevant result(s) by title and the complete raw URL shown in the `URL` line
+- Do not format wiki citations as markdown hyperlinks like `[Title](URL)`; write the full URL as visible text so users can copy/open it even when the client does not render links
 - Extract the key fact the user needs — don't dump the raw list
 - If multiple results are relevant, summarise across them
 - If nothing matches, say so and suggest rephrasing or a broader term
@@ -87,6 +91,10 @@ Read the returned markdown and compose a direct answer:
 | `--depth links` | `links` | Title, URL, and excerpt only |
 | `--depth skim` | `links` | Fetch capped query-relevant passages from the top ranked page |
 | `--depth deep` | `links` | Fetch larger passage budgets from the top three ranked pages |
+| `--depth ultra` | `links` | Expanded title+text search, five page bodies, and up to two cross-linked pages |
+| `--workers N` | 4 | Maximum parallel HTTP workers for page fetches |
+| `--recency-halflife-days DAYS` | none | Ultra-only recency tie-breaker |
+| `--legacy-scorer` | off | Use pre-ultra ranking with `--depth ultra` |
 | `--body-top N` | by depth | Override number of top ranked pages to fetch bodies for |
 | `--body-chars N` | by depth | Override max passage characters per fetched page |
 | `--json` | off | Emit results as JSON instead of Markdown (use for data integration) |
@@ -101,13 +109,16 @@ The CLI returns ranked markdown:
 ## 1. Page Title
 - **Space:** Space Name (`KEY`)
 - **URL:** https://your-instance/...
+- **Source:** Cross-link from Source Page (https://your-instance/...)    # only for ultra cross-linked pages
 - **Excerpt:** ...
 - **Headings:** ...
-- **Relevant passages:**    # only with --depth skim/deep
+- **Relevant passages:**    # only with --depth skim/deep/ultra
   - Heading: matching passage text...
 ```
 
-Higher-ranked results are more likely to contain the answer. Start from result 1. Avoid `--depth deep` unless the user explicitly asks to compare, verify, or inspect multiple pages.
+Higher-ranked results are more likely to contain the answer. Start from result 1. Avoid `--depth deep` or `--depth ultra` unless the user explicitly asks to compare, verify, inspect multiple pages, or search exhaustively.
+
+Every result includes a full raw URL. In ultra mode, appended cross-linked pages are labeled with the source page title and full raw source URL. When answering, preserve URLs as visible text and do not hide them behind linked titles.
 
 > **Note:** The `--json` flag exists for programmatic use and data integration scenarios, but this skill uses the default Markdown format for human-readable synthesis.
 

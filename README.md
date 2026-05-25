@@ -101,6 +101,12 @@ python3 scripts/wiki_answer.py --query "release checklist" --depth skim
 
 # Deeper search: fetch larger passage budgets from the top three ranked pages
 python3 scripts/wiki_answer.py --query "release approvals" --depth deep
+
+# Ultra search: parallel title+text search, expanded query variants, cross-linked pages
+python3 scripts/wiki_answer.py --query "release approvals" --depth ultra
+
+# Tune ultra mode for rate-limited instances or rollback ranking behavior
+python3 scripts/wiki_answer.py --query "release approvals" --depth ultra --workers 2 --legacy-scorer
 ```
 
 Or let your AI assistant call it automatically after installing the skill.
@@ -115,12 +121,20 @@ Or let your AI assistant call it automatically after installing the skill.
 | `--depth links` | `links` | Title, URL, and excerpt only; cheapest mode |
 | `--depth skim` | `links` | Fetch capped query-relevant passages from the top ranked page |
 | `--depth deep` | `links` | Fetch larger passage budgets from the top three ranked pages |
+| `--depth ultra` | `links` | Expanded title+text search, top five page bodies, and up to two cross-linked pages |
+| `--workers N` | 4 | Maximum parallel HTTP workers for page fetches |
+| `--recency-halflife-days DAYS` | none | Ultra-only recency tie-breaker using `e^(-age/DAYS)` decay |
+| `--legacy-scorer` | off | Use the pre-ultra ranking formula, even with `--depth ultra` |
 | `--body-top N` | by depth | Override number of top ranked pages to fetch bodies for |
 | `--body-chars N` | by depth | Override max passage characters per fetched page |
 | `--json` | off | Emit results as JSON instead of Markdown |
 | `-v`, `--verbose` | off | Emit diagnostic logging to stderr (CQL, request URLs, timings) |
 
-By default, the CLI performs one search request and returns compact title, URL, and excerpt results. Use `--depth skim` when the user needs details likely absent from snippets, such as process steps, troubleshooting, or API usage. Use `--depth deep` only for explicit requests to verify, compare, or inspect multiple pages. Defaults are `links` = no body text, `skim` = 1 page with up to 1200 relevant passage characters, and `deep` = 3 pages with up to 2000 relevant passage characters each.
+By default, the CLI performs one search request and returns compact title, URL, and excerpt results. Use `--depth skim` when the user needs details likely absent from snippets, such as process steps, troubleshooting, or API usage. Use `--depth deep` only for explicit requests to verify, compare, or inspect multiple pages. Use `--depth ultra` for exhaustive wiki research: it expands query variants, runs text and title searches, fetches relevant passages from the top five pages, and appends up to two first-seen cross-linked pages. Ultra mode costs more API calls, typically two search calls plus five to seven body fetches; use `--workers N` to reduce concurrency if Confluence rate-limits requests.
+
+Defaults are `links` = no body text, `skim` = 1 page with up to 1200 relevant passage characters, `deep` = 3 pages with up to 2000 relevant passage characters each, and `ultra` = 5 pages with up to 3000 relevant passage characters each plus cross-links. JSON output includes `source: "cross-link"` and `from_page` for appended cross-linked results.
+
+Every result includes a complete raw Confluence URL. When Confluence omits its canonical page path, the CLI falls back to a page-id lookup URL. Ultra-mode Markdown also labels appended cross-linked pages with the source page title and complete raw source URL. Assistant skill instructions require visible raw URLs instead of markdown title hyperlinks, because some clients do not render links reliably.
 
 Assistant skills should map user phrasing to depth:
 
@@ -129,6 +143,7 @@ Assistant skills should map user phrasing to depth:
 | "find", "where is", "link to", "docs for", "just the link" | `links` |
 | "how do I", "show steps", "read the page", "according to the docs", "troubleshoot" | `skim` |
 | "deep search", "verify", "compare pages", "source of truth", "exact wording", "think harder" | `deep` |
+| "ultra search", "research mode", "exhaustive", "leave no stone unturned", "ultrathink the wiki" | `ultra` |
 
 ## Platform support
 

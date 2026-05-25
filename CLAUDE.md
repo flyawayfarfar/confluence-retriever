@@ -120,6 +120,7 @@ requirements.txt           # Minimal deps: requests, beautifulsoup4, python-dote
 | `--depth links` (default) | 1 search | Quick finding — "where is the page?" |
 | `--depth skim` | 1 search + 1 body fetch | "How do I...?" — steps and details from 1 page (capped 1200 chars) |
 | `--depth deep` | 1 search + 3 body fetches | Deep verification — details from 3 pages (2000 chars each) |
+| `--depth ultra` | 2 searches + 5-7 body fetches | Exhaustive research — expanded query variants, title matches, and first-seen cross-links |
 
 The depth modes affect cost (API calls) and completeness. Shallow queries return only links/excerpts; deeper queries fetch capped query-relevant passages from top-ranked pages.
 
@@ -159,7 +160,7 @@ The installer is cross-platform:
 - **Test structure:** Arrange-Act-Assert pattern
 - **Naming:** `test_<expected_behavior>`
 - **Coverage:** 46+ tests covering CQL escaping, query building, HTML parsing, ranking, API error handling, and config loading
-- **No fixtures:** Keep tests explicit and readable
+- **No fixture directories:** Keep mocked responses explicit and readable inside tests
 
 When adding features, write tests first (RED), then implement (GREEN), then verify coverage.
 
