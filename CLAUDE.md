@@ -11,40 +11,55 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 python3 -m venv .venv
 source .venv/bin/activate
 
-# Install dependencies
-pip install -r requirements.txt
+# Install the package + dev dependencies (installs the `confluence-search` console script)
+pip install -e .[dev]
 
-# Configure credentials
+# Optional: install full-page HTML→Markdown renderer for `confluence-search read`
+pip install -e .[read]
+
+# Configure credentials — interactive
+confluence-search setup
+# ...or by hand:
 cp .env.example ~/.config/confluence-retriever/.env
 chmod 600 ~/.config/confluence-retriever/.env
-# Edit ~/.config/confluence-retriever/.env with CONFLUENCE_URL and CONFLUENCE_PAT
 ```
 
 ### Running Tests
 
 ```bash
-# Full test suite
+# Full test suite (156 tests, all HTTP mocked)
 pytest
 
 # Single test (example)
 pytest tests/test_wiki_answer.py::TestCqlEscape::test_plain_text_unchanged -v
-
-# Run with output
-pytest -v
 ```
 
 ### Manual CLI Verification
 
 ```bash
-# Basic search (after .env is configured)
-python3 scripts/wiki_answer.py --query "deployment process" --limit 5
+# Basic search
+confluence-search search --query "deployment process" --limit 5
 
-# With multiple queries and space filter
-python3 scripts/wiki_answer.py --query "auth" --query "API" --space MT
+# Multiple queries and space filter
+confluence-search search --query "auth" --query "API" --space MT
 
-# With page body content (skim or deep)
-python3 scripts/wiki_answer.py --query "release checklist" --depth skim
+# Fetch passages from the top page
+confluence-search search --query "release checklist" --depth skim
+
+# Deep mode: parallel title+text + 5 pages + cross-links
+confluence-search search --query "release approvals" --depth deep
+
+# Read a single page in full Markdown
+confluence-search read 12345 --format markdown
+
+# List child pages
+confluence-search children 12345
+
+# Self-diagnose
+confluence-search doctor
 ```
+
+The legacy `python3 scripts/wiki_answer.py …` invocation still works via a shim.
 
 ### Skill Installer Testing
 
@@ -65,30 +80,45 @@ python3 install.py --target agents
 
 **confluence-retriever** is a "dumb retriever, smart host" design:
 
-- **CLI (`scripts/wiki_answer.py`)** — Single stateless module handling: config loading, CQL query building, Confluence REST API calls, HTML parsing, result ranking, and markdown output formatting
-- **Host AI** — The AI assistant (Claude Code, Copilot, Codex, Gemini, etc.) calls the CLI and synthesizes answers from the output
-- **Skill (`skills/search-wiki.md`)** — Template instructions for the AI on how to invoke the CLI; `install.py` stamps the absolute path into it
+- **CLI (`confluence-search` console script, package `confluence_retriever`)** — handles config loading, CQL building, Confluence REST API calls, HTML parsing, ranking, and output formatting across `search`, `read`, `info`, `children`, `setup`, and `doctor` subcommands
+- **Host AI** — Claude Code / Copilot / Codex / Gemini / etc. invokes the CLI and synthesises answers from the structured output
+- **Skill (`skills/search-wiki.md`)** — Template instructions for the host AI; `install.py` stamps both the project root and the resolved command name into it
 
-The CLI returns deterministic ranked markdown with no AI logic, making it compatible with any host and shell/IDE/agent.
+The CLI returns deterministic ranked Markdown (or JSON) with no AI logic, making it compatible with any host and shell/IDE/agent.
 
 ### File Structure
 
 ```
-scripts/wiki_answer.py     # Single-file CLI with 7 logical sections:
-                           # Config, Config Loader, CQL Builder, HTML Utils,
-                           # Ranking, ConfluenceAdapter (HTTP wrapper), CLI (argparse)
+src/confluence_retriever/        # Python package
+├── cli.py                       # Click entry point + subcommands
+├── config.py                    # .env loader, exit codes
+├── client.py                    # ConfluenceAdapter + exception types
+├── cql.py                       # cql_escape, build_cql
+├── html_utils.py                # html_to_text/markdown, passage extraction,
+│                                # heading extraction, cross-link parser, scorer
+├── ranking.py                   # score_result, rank_results, expand_queries,
+│                                # depth defaults + deprecated-alias map
+├── url_parsing.py               # extract_page_id (URL/ID → numeric ID)
+└── formatters.py                # Markdown / JSON renderers per subcommand
 
-tests/test_wiki_answer.py  # 46+ unit tests with pytest + responses (mocked HTTP)
-                           # Test classes: TestCqlEscape, TestBuildCql, TestHtmlToText,
-                           # TestExtractHeadings, TestScoreResult, TestRankResults, etc.
+scripts/wiki_answer.py           # Legacy shim — re-exports the package surface
+                                 # so `import wiki_answer as wiki` keeps working
 
-install.py                 # Cross-platform skill installer (Windows/macOS/Linux/WSL2)
-                           # Substitutes absolute wiki_answer.py path into skill template
+tests/                           # 156 unit tests, all HTTP mocked
+├── test_wiki_answer.py          # Search, ranking, config, depth, ultra E2E
+├── test_scorer_invariants.py    # Recency must not invert relevance order, etc.
+├── test_url_parsing.py          # All four URL shapes + bare ID + bad input
+├── test_html_to_markdown.py     # markdownify path + fallback
+├── test_cli_subcommands.py      # read, info, children, setup, doctor via Click
+└── test_install.py              # Skill installer: paths, command resolution
 
-skills/search-wiki.md      # AI skill template with placeholder {WIKI_ANSWER_PATH}
+install.py                       # Cross-platform skill installer
+                                 # Placeholders: <PROJECT_ROOT> and {COMMAND}
 
-requirements.txt           # Minimal deps: requests, beautifulsoup4, python-dotenv,
-                           # pytest, responses
+skills/search-wiki.md            # AI skill template
+pyproject.toml                   # Declares `confluence-search` console script
+requirements.txt                 # Runtime deps: requests, bs4, python-dotenv, click
+requirements-dev.txt             # +pytest, responses, markdownify
 ```
 
 ## Configuration
@@ -113,16 +143,17 @@ requirements.txt           # Minimal deps: requests, beautifulsoup4, python-dote
 | 3 | Auth failed | PAT expired or invalid (401/403) |
 | 4 | Network error | Confluence unreachable or timeout |
 
-## CLI Modes (Depth)
+## CLI Modes (Depth) — v0.2
 
 | Mode | API calls | Purpose |
 |------|-----------|---------|
 | `--depth links` (default) | 1 search | Quick finding — "where is the page?" |
 | `--depth skim` | 1 search + 1 body fetch | "How do I...?" — steps and details from 1 page (capped 1200 chars) |
-| `--depth deep` | 1 search + 3 body fetches | Deep verification — details from 3 pages (2000 chars each) |
-| `--depth ultra` | 2 searches + 5-7 body fetches | Exhaustive research — expanded query variants, title matches, and first-seen cross-links |
+| `--depth deep` | 2 searches + 5-7 body fetches | Exhaustive research — expanded query variants, parallel title+text search, and first-seen cross-links |
 
-The depth modes affect cost (API calls) and completeness. Shallow queries return only links/excerpts; deeper queries fetch capped query-relevant passages from top-ranked pages.
+`--depth ultra` is a deprecated alias for `--depth deep`. The pre-0.2
+3-page `deep` preset has been removed; pin `--depth skim --body-top 3
+--body-chars 2000` to recover that exact midpoint. See [MIGRATION.md](MIGRATION.md).
 
 ## Common Development Tasks
 

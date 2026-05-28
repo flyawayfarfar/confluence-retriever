@@ -1,0 +1,3 @@
+[console_scripts]
+confluence-search = confluence_retriever.cli:main_entry
+wiki-answer = confluence_retriever.cli:main_entry

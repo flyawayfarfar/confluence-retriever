@@ -6,7 +6,9 @@ origin: local
 
 # Search Wiki (Confluence)
 
-Use the `wiki_answer.py` retrieval CLI to fetch ranked Confluence results, then synthesize a direct answer.
+Use the `confluence-search` console script (or, for legacy installs, the
+`wiki_answer.py` shim) to fetch ranked Confluence results, then synthesize
+a direct answer.
 
 ## When to Activate
 
@@ -15,17 +17,34 @@ Use the `wiki_answer.py` retrieval CLI to fetch ranked Confluence results, then 
 - User needs a link to a specific page or documentation
 - User asks a question that would be answered by internal documentation
 
-## Script Location
+## Command
 
 ```
-<PROJECT_ROOT>/scripts/wiki_answer.py
+{COMMAND}
 ```
+
+Recommended install: `pip install <PROJECT_ROOT>` exposes the
+`confluence-search` console script. The legacy `python3
+<PROJECT_ROOT>/scripts/wiki_answer.py` invocation still works as a shim.
 
 ## How to Use
 
-### Step 1 — Extract query terms
+### Step 1 — Pick a subcommand
 
-Break the user's question into 1–3 focused keyword phrases. Prefer nouns and technical terms over stop words.
+| User intent | Subcommand |
+|-------------|-----------|
+| Search for pages by topic | `{COMMAND} search ...` |
+| Read a specific page in full | `{COMMAND} read <id-or-url>` |
+| Metadata only (title, version, space) | `{COMMAND} info <id-or-url>` |
+| List child pages under a parent | `{COMMAND} children <id-or-url>` |
+
+Default `search` is implied if you only have a `--query` and no subcommand:
+`{COMMAND} --query "auth"` still works.
+
+### Step 2 — Extract query terms (search only)
+
+Break the user's question into 1–3 focused keyword phrases. Prefer nouns and
+technical terms over stop words.
 
 | User asks | Good queries |
 |-----------|-------------|
@@ -33,46 +52,51 @@ Break the user's question into 1–3 focused keyword phrases. Prefer nouns and t
 | "what is the deployment process for microservices?" | `deployment`, `microservice` |
 | "who owns the MT space?" | `MT space owner` |
 
-### Step 2 — Choose Retrieval Depth
+### Step 3 — Choose Retrieval Depth (search only)
 
 Default to `--depth links` unless the user's wording asks for more detail.
 
 | Depth | Use when the user says | Behavior |
 |-------|------------------------|----------|
 | `links` | "find", "search", "where is", "link to", "docs for", "page about", "quick answer", "just the link", "top result" | One search request; title, URL, and excerpt only |
-| `skim` | "how do I", "how does", "what are the steps", "show me the steps", "summarise the page", "read the page", "according to the docs", "explain", "details", "setup", "configure", "troubleshoot", "error", "API usage", "example command" | Fetch capped query-relevant passages from the top ranked page |
-| `deep` | "deep search", "look deeper", "verify", "double check", "cross-check", "compare pages", "check multiple pages", "source of truth", "exact wording", "policy wording", "think harder", "be thorough", "investigate", "I need confidence", "don't just give the top result" | Fetch larger passage budgets from the top three ranked pages |
-| `ultra` | "ultra search", "research mode", "exhaustive", "leave no stone unturned", "ultrathink", "ultrathink the wiki" | Expanded title+text search, top five page bodies, and up to two first-seen cross-linked pages |
+| `skim` | "how do I", "how does", "what are the steps", "summarise the page", "read the page", "according to the docs", "explain", "details", "setup", "configure", "troubleshoot", "error", "API usage", "example command" | Fetch capped query-relevant passages from the top ranked page |
+| `deep` | "deep search", "research mode", "exhaustive", "leave no stone unturned", "verify", "compare pages", "source of truth", "exact wording", "think harder", "be thorough", "investigate", "I need confidence" | Expanded title+text search, top five page bodies, and up to two first-seen cross-linked pages |
 
-Do not send trigger phrases such as "think harder" to Confluence as query text. Interpret them as depth instructions, then extract the actual wiki search terms separately.
+Do not send trigger phrases such as "think harder" or "deep search" to
+Confluence as query text. Interpret them as depth instructions, then extract
+the actual wiki search terms separately.
 
-### Step 3 — Run the CLI
+Note: `--depth ultra` is a deprecated alias for `--depth deep` and will be
+removed in a future release.
+
+### Step 4 — Run the command
 
 ```bash
-python3 <PROJECT_ROOT>/scripts/wiki_answer.py \
+{COMMAND} search \
   --query "TERM1" \
   --query "TERM2" \
   --depth links \
   --limit 5
 ```
 
-Add `--space KEY` when the user mentions a specific space or team (e.g. `--space MT` for Mobile Team).
+Add `--space KEY` when the user mentions a specific space or team
+(e.g. `--space MT` for Mobile Team).
 
-Use `--depth skim` when the user needs details likely absent from snippets:
+If the user already supplied a Confluence URL or page ID, skip the search and
+use the fast path:
 
 ```bash
-python3 <PROJECT_ROOT>/scripts/wiki_answer.py \
-  --query "TERM1" \
-  --query "TERM2" \
-  --depth skim \
-  --limit 5
+{COMMAND} search --page-id <ID-OR-URL> --depth skim
+# or, for the whole page rendered as Markdown:
+{COMMAND} read <ID-OR-URL> --format markdown
 ```
 
-Use `--depth deep` only when the user explicitly asks for verification, comparison, source-of-truth confidence, exact wording, or deeper investigation.
+Use `--depth skim` when the user needs details likely absent from snippets.
+Use `--depth deep` for exhaustive research, verification, or cross-page
+comparison. Deep mode costs more API calls (two search calls plus five to
+seven body fetches).
 
-Use `--depth ultra` only when the user explicitly asks for exhaustive wiki research. Ultra mode costs more API calls: two search calls plus five to seven body fetches.
-
-### Step 4 — Synthesize
+### Step 5 — Synthesize
 
 Read the returned markdown and compose a direct answer:
 - Cite the most relevant result(s) by title and the complete raw URL shown in the `URL` line
@@ -81,27 +105,27 @@ Read the returned markdown and compose a direct answer:
 - If multiple results are relevant, summarise across them
 - If nothing matches, say so and suggest rephrasing or a broader term
 
-## Flags Reference
+## Flags Reference (search)
 
 | Flag | Default | Purpose |
 |------|---------|---------|
-| `--query TEXT` | required | Search term (repeat for multiple) |
+| `--query TEXT` | required* | Search term (repeat for multiple) |
+| `--page-id ID-OR-URL` | none | Skip search and fetch this page directly (*replaces `--query`) |
 | `--space KEY` | none | Filter to a Confluence space (e.g. `MT`, `IIT`, `CDBE`) |
 | `--limit N` | 5 | Max results to retrieve |
 | `--depth links` | `links` | Title, URL, and excerpt only |
 | `--depth skim` | `links` | Fetch capped query-relevant passages from the top ranked page |
-| `--depth deep` | `links` | Fetch larger passage budgets from the top three ranked pages |
-| `--depth ultra` | `links` | Expanded title+text search, five page bodies, and up to two cross-linked pages |
+| `--depth deep` | `links` | Expanded title+text search, five page bodies, and up to two cross-linked pages |
 | `--workers N` | 4 | Maximum parallel HTTP workers for page fetches |
-| `--recency-halflife-days DAYS` | none | Ultra-only recency tie-breaker |
-| `--legacy-scorer` | off | Use pre-ultra ranking with `--depth ultra` |
+| `--recency-halflife-days DAYS` | none | Deep-only recency tie-breaker |
+| `--legacy-scorer` | off | Use pre-deep ranking with `--depth deep` |
 | `--body-top N` | by depth | Override number of top ranked pages to fetch bodies for |
 | `--body-chars N` | by depth | Override max passage characters per fetched page |
-| `--json` | off | Emit results as JSON instead of Markdown (use for data integration) |
+| `--format json\|markdown` | `markdown` | Output format (`--json` is a deprecated alias for `--format json`) |
 
 ## Output Format
 
-The CLI returns ranked markdown:
+The default markdown output looks like:
 
 ```
 # Wiki results for 'query'
@@ -109,25 +133,31 @@ The CLI returns ranked markdown:
 ## 1. Page Title
 - **Space:** Space Name (`KEY`)
 - **URL:** https://your-instance/...
-- **Source:** Cross-link from Source Page (https://your-instance/...)    # only for ultra cross-linked pages
+- **Source:** Cross-link from Source Page (https://your-instance/...)    # only for deep cross-linked pages
 - **Excerpt:** ...
 - **Headings:** ...
-- **Relevant passages:**    # only with --depth skim/deep/ultra
+- **Relevant passages:**    # only with --depth skim/deep
   - Heading: matching passage text...
 ```
 
-Higher-ranked results are more likely to contain the answer. Start from result 1. Avoid `--depth deep` or `--depth ultra` unless the user explicitly asks to compare, verify, inspect multiple pages, or search exhaustively.
+Higher-ranked results are more likely to contain the answer. Start from
+result 1. Avoid `--depth deep` unless the user explicitly asks to compare,
+verify, inspect multiple pages, or search exhaustively.
 
-Every result includes a full raw URL. In ultra mode, appended cross-linked pages are labeled with the source page title and full raw source URL. When answering, preserve URLs as visible text and do not hide them behind linked titles.
+Every result includes a full raw URL. In deep mode, appended cross-linked
+pages are labeled with the source page title and full raw source URL. When
+answering, preserve URLs as visible text and do not hide them behind
+linked titles.
 
-> **Note:** The `--json` flag exists for programmatic use and data integration scenarios, but this skill uses the default Markdown format for human-readable synthesis.
+> **Note:** The `--format json` flag exists for programmatic use, but this
+> skill defaults to Markdown for human-readable synthesis.
 
 ## Error Handling
 
 | Exit code | Meaning | Action |
 |-----------|---------|--------|
 | 0 | OK | Results returned |
-| 2 | Config error | `.env` missing or `CONFLUENCE_PAT`/`CONFLUENCE_URL` not set — check `<PROJECT_ROOT>/.env` |
+| 2 | Config error | `.env` missing or `CONFLUENCE_PAT`/`CONFLUENCE_URL` not set — run `{COMMAND} setup` |
 | 3 | Auth failed | PAT expired or invalid — regenerate at your Confluence instance |
 | 4 | Network error | VPN not connected or Confluence unreachable |
 
@@ -136,7 +166,7 @@ Every result includes a full raw URL. In ultra mode, appended cross-linked pages
 User: "how does the prospect authentication API work?"
 
 ```bash
-python3 <PROJECT_ROOT>/scripts/wiki_answer.py \
+{COMMAND} search \
   --query "prospect authentication" \
   --query "authenticate API" \
   --depth skim \

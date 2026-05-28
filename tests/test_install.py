@@ -38,3 +38,24 @@ class TestSkillDest:
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
         assert install.skill_dest("claude") == tmp_path / ".claude" / "skills" / "search-wiki" / "SKILL.md"
+
+
+class TestResolveCommand:
+    def test_explicit_command_wins(self, monkeypatch):
+        monkeypatch.setattr(install.shutil, "which", lambda _: "/usr/local/bin/confluence-search")
+        assert install.resolve_command("my-custom", "/proj") == "my-custom"
+
+    def test_console_script_preferred_when_on_path(self, monkeypatch):
+        monkeypatch.setattr(install.shutil, "which", lambda name: "/x/" + name if name == "confluence-search" else None)
+        assert install.resolve_command(None, "/proj") == "confluence-search"
+
+    def test_falls_back_to_legacy_script_when_no_console_script(self, monkeypatch):
+        monkeypatch.setattr(install.shutil, "which", lambda _: None)
+        assert install.resolve_command(None, "/proj") == "python3 /proj/scripts/wiki_answer.py"
+
+
+class TestSkillTemplateStamping:
+    def test_template_contains_both_placeholders(self):
+        content = install.SKILL_TEMPLATE.read_text(encoding="utf-8")
+        assert install.PROJECT_ROOT_PLACEHOLDER in content
+        assert install.COMMAND_PLACEHOLDER in content
