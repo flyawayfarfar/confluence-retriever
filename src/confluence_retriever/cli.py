@@ -21,6 +21,7 @@ from typing import Optional
 
 import click
 
+from confluence_retriever import config as config_module
 from confluence_retriever.client import (
     ConfluenceAdapter,
     ConfluenceAuthError,
@@ -492,16 +493,18 @@ def doctor_cmd() -> None:
     """Self-diagnose: config present? PAT valid? Confluence reachable?"""
     all_ok = True
 
-    env_file = USER_ENV_FILE if USER_ENV_FILE.exists() else PROJECT_ENV_FILE
+    user_env_file = config_module.USER_ENV_FILE
+    project_env_file = config_module.PROJECT_ENV_FILE
+    env_file = user_env_file if user_env_file.exists() else project_env_file
     if env_file.exists():
         click.echo(f"[ok] config file: {env_file}")
         perms = oct(env_file.stat().st_mode & 0o777)
-        if env_file == USER_ENV_FILE and perms != "0o600":
+        if env_file == user_env_file and perms != "0o600":
             click.echo(f"[warn] perms on {env_file}: {perms} (expected 0o600)")
         else:
             click.echo(f"[ok] perms: {perms}")
     else:
-        click.echo(f"[fail] no config file at {USER_ENV_FILE} or {PROJECT_ENV_FILE}")
+        click.echo(f"[fail] no config file at {user_env_file} or {project_env_file}")
         click.echo("       run: confluence-search setup")
         sys.exit(EXIT_CONFIG)
 
