@@ -24,6 +24,7 @@ import sys
 from pathlib import Path
 
 SKILL_TEMPLATE = Path(__file__).parent / "skills" / "search-wiki.md"
+SKILL_SUPPORT_FILES = ("evals.md", "memory.md")
 
 # Template placeholders.
 PROJECT_ROOT_PLACEHOLDER = "<PROJECT_ROOT>"
@@ -61,6 +62,11 @@ def resolve_command(explicit: str | None, project_root: str) -> str:
     return f"python3 {project_root}/scripts/wiki_answer.py"
 
 
+def support_file_sources() -> list[Path]:
+    """Return support files installed beside SKILL.md."""
+    return [SKILL_TEMPLATE.parent / name for name in SKILL_SUPPORT_FILES]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -89,6 +95,13 @@ def main() -> None:
         print(f"ERROR: skill template not found at {SKILL_TEMPLATE}", file=sys.stderr)
         sys.exit(1)
 
+    support_files = support_file_sources()
+    missing_support_files = [path for path in support_files if not path.exists()]
+    if missing_support_files:
+        for path in missing_support_files:
+            print(f"ERROR: skill support file not found at {path}", file=sys.stderr)
+        sys.exit(1)
+
     project_root = str(Path(__file__).parent.resolve())
     command = resolve_command(args.command, project_root)
 
@@ -105,11 +118,18 @@ def main() -> None:
         print(f"Stamped command: {command}")
         print(f"Stamped project root: {project_root}\n")
         print(content)
+        for source in support_files:
+            print(f"\nWould copy support file: {source.name} -> {dest.parent / source.name}")
         return
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(content, encoding="utf-8")
+    for source in support_files:
+        target = dest.parent / source.name
+        target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
     print(f"Installed: {dest}")
+    for source in support_files:
+        print(f"Installed support file: {dest.parent / source.name}")
     print(f"Stamped command: {command}")
     print(f"Stamped project root: {project_root}")
 

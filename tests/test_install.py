@@ -59,3 +59,24 @@ class TestSkillTemplateStamping:
         content = install.SKILL_TEMPLATE.read_text(encoding="utf-8")
         assert install.PROJECT_ROOT_PLACEHOLDER in content
         assert install.COMMAND_PLACEHOLDER in content
+
+
+class TestSupportFiles:
+    def test_support_file_sources_include_evals_and_memory(self):
+        names = [path.name for path in install.support_file_sources()]
+
+        assert names == ["evals.md", "memory.md"]
+
+    def test_install_copies_support_files(self, monkeypatch, tmp_path):
+        destination = tmp_path / "search-wiki" / "SKILL.md"
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["install.py", "--dest", str(destination), "--command", "confluence-search"],
+        )
+
+        install.main()
+
+        assert destination.exists()
+        assert (destination.parent / "evals.md").exists()
+        assert (destination.parent / "memory.md").exists()

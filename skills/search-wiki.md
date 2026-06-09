@@ -10,6 +10,10 @@ Use the `confluence-search` console script (or, for legacy installs, the
 `wiki_answer.py` shim) to fetch ranked Confluence results, then synthesize
 a direct answer.
 
+Load `memory.md` before synthesizing a substantive answer when that file is
+available. Use `evals.md` as the final grounding check. Skip the eval loop for
+simple requests that only ask for a page link.
+
 ## When to Activate
 
 - User asks how something works internally ("how does X work", "what is Y", "where is Z documented")
@@ -104,6 +108,12 @@ Read the returned markdown and compose a direct answer:
 - Extract the key fact the user needs — don't dump the raw list
 - If multiple results are relevant, summarise across them
 - If nothing matches, say so and suggest rephrasing or a broader term
+
+### Step 6 — Check the answer
+
+For substantive answers, run the checks in `evals.md` before responding. If a
+check fails, revise once using only the retrieved results. Remove claims that
+the returned titles, excerpts, headings, or passages do not support.
 
 ## Flags Reference (search)
 
