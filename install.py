@@ -15,6 +15,8 @@ Usage:
     python install.py --check                        # dry-run: print what would be written
 """
 
+from __future__ import annotations
+
 import argparse
 import os
 import shutil
