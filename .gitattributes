@@ -1,0 +1,11 @@
+# Normalise line endings to LF in the repository.
+# On checkout, files stay LF on Linux/macOS; Windows git clients convert to CRLF
+# only when core.autocrlf=true is set locally — this repo doesn't enforce that.
+* text=auto eol=lf
+
+# Binary files — never touch line endings.
+*.png binary
+*.jpg binary
+*.ico binary
+*.zip binary
+*.whl binary
