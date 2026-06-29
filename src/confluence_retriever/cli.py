@@ -137,8 +137,8 @@ def _handle_api(fn):
 def main(ctx: click.Context) -> None:
     """Search and read pages from a Confluence instance.
 
-    With no subcommand, runs `search` for backward compatibility with the
-    legacy `wiki_answer.py --query "..."` invocation.
+    With no subcommand, runs `search` for backward compatibility with
+    bare `--query` flag invocations.
     """
     if ctx.invoked_subcommand is None:
         # Fall through to `search` so old flag-only invocations keep working.
@@ -535,11 +535,11 @@ def doctor_cmd() -> None:
 # ── argv adapter for the legacy shim ────────────────────────────────────────
 
 def main_entry(argv: Optional[list[str]] = None) -> None:
-    """Legacy compatibility shim.
+    """CLI entry point.
 
-    The old ``wiki_answer.py`` accepted ``--query`` etc. as top-level flags.
     Click's group requires a subcommand. We detect "no subcommand, but search-
-    like flags present" and inject ``search`` so old scripts keep working.
+    like flags present" and inject ``search`` so bare ``--query`` invocations
+    keep working.
     """
     args = list(argv if argv is not None else sys.argv[1:])
     known_subcommands = {"search", "read", "info", "children", "setup", "doctor"}

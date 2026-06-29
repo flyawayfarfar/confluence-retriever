@@ -4,8 +4,8 @@
 
 **confluence-retriever** is a lightweight Python CLI that retrieves ranked search results from Confluence. The design follows a "dumb retriever, smart host" pattern:
 
-- **CLI (`scripts/wiki_answer.py`)** — single-file module handling configuration, CQL query building, API calls to Confluence, HTML parsing, result ranking, and markdown output formatting
-- **Host AI** — the AI assistant (Claude Code, Copilot, Codex, etc.) that calls the CLI and synthesizes answers from the output
+- **CLI (`confluence-search` console script, package `confluence_retriever`)** — handles configuration, CQL query building, API calls to Confluence, HTML parsing, result ranking, and markdown output formatting
+- **Host AI** — the AI assistant (Claude Code, Copilot, Codex, Gemini, Antigravity, etc.) that calls the CLI and synthesizes answers from the output
 
 The CLI is stateless, returns deterministic ranked markdown, and has no AI reasoning logic. This allows any host AI and any shell/IDE/agent to use it.
 
@@ -35,8 +35,9 @@ ptw
 ### Manual CLI Verification
 
 ```bash
-# After configuring .env with CONFLUENCE_URL and CONFLUENCE_PAT
-python3 scripts/wiki_answer.py --query "test" --limit 3
+# After configuring credentials
+confluence-search search --query "test" --limit 3
+confluence-search doctor
 ```
 
 ### Linting & Type Checks
@@ -45,17 +46,18 @@ This repo uses no formal linter or type checker. Follow the style conventions li
 
 ## Code Structure
 
-### `scripts/wiki_answer.py`
+### `src/confluence_retriever/` package
 
-Single-file CLI with these logical sections:
+Modules and their responsibilities:
 
-1. **Config** — constants for file paths, timeouts, exit codes, depth defaults
-2. **Config Loader** (`load_config()`) — reads `.env` from `~/.config/confluence-retriever/.env` or `./.env`
-3. **CQL Builder** (`build_cql()`, `cql_escape()`) — constructs Confluence CQL queries with proper escaping
-4. **HTML Utilities** (`html_to_text()`, `extract_headings()`, `extract_relevant_passages()`, `strip_highlight_markers()`) — parses page bodies and selects query-relevant passages
-5. **Ranking** (`score_result()`, `rank_results()`) — scores results by keyword match (title matches score higher than excerpt matches)
-6. **Confluence Adapter** (`ConfluenceAdapter` class) — wraps HTTP calls to `/rest/api/content/search` and `/rest/api/content/{id}?expand=body.storage`
-7. **CLI** (`main()` with argparse) — wires everything together, handles exit codes
+1. **`config.py`** — `.env` loading, exit code constants
+2. **`cql.py`** (`build_cql()`, `cql_escape()`) — Confluence CQL query construction with proper escaping
+3. **`html_utils.py`** (`html_to_text()`, `extract_headings()`, `extract_relevant_passages()`, `strip_highlight_markers()`) — HTML parsing and query-relevant passage extraction
+4. **`ranking.py`** (`score_result()`, `rank_results()`) — keyword scoring (title matches outrank excerpt matches)
+5. **`client.py`** (`ConfluenceAdapter`) — HTTP calls to `/rest/api/content/search` and `/rest/api/content/{id}?expand=body.storage`
+6. **`formatters.py`** — Markdown and JSON renderers per subcommand
+7. **`url_parsing.py`** — extracts numeric page ID from URL or bare ID
+8. **`cli.py`** (`main_entry()` via Click) — wires everything together, handles exit codes
 
 ### `tests/test_wiki_answer.py`
 
@@ -63,11 +65,11 @@ Single-file CLI with these logical sections:
 
 ### `install.py`
 
-Cross-platform installer for AI skill templates (Claude Code, Codex, custom paths). It substitutes the absolute path to `wiki_answer.py` into `skills/search-wiki.md` and writes the result to the target skill location.
+Cross-platform skill installer (Claude Code, Codex, Gemini, Antigravity, Copilot, agents). Stamps `confluence-search` into the `{COMMAND}` placeholder in `skills/search-wiki.md` and writes to the target skill location.
 
 ### `skills/search-wiki.md`
 
-Template containing instructions for the AI assistant on how to invoke the CLI. Placeholder `{WIKI_ANSWER_PATH}` is stamped by `install.py`.
+Template with instructions for the AI assistant on how to invoke the CLI. The `{COMMAND}` placeholder is stamped by `install.py`.
 
 ## Style & Conventions
 
@@ -111,8 +113,8 @@ CONFLUENCE_PAT=your_personal_access_token
 ### Basic Usage
 
 ```bash
-python3 scripts/wiki_answer.py --query "deployment process" --limit 5
-python3 scripts/wiki_answer.py --query "auth" --query "API" --space MT --limit 10
+confluence-search search --query "deployment process" --limit 5
+confluence-search search --query "auth" --query "API" --space MT --limit 10
 ```
 
 ### Depth Modes
@@ -122,7 +124,7 @@ python3 scripts/wiki_answer.py --query "auth" --query "API" --space MT --limit 1
 | `--depth links` (default) | 1 search | No | Quick finding — "where is the page?" |
 | `--depth skim` | 1 search + 1 body fetch | 1 page, capped 1200 relevant passage chars | "How do I...?" steps and details |
 | `--depth deep` | 1 search + 3 body fetches | 3 pages, 2000 relevant passage chars each | Deep verification, compare pages |
-| `--depth ultra` | 2 searches + 5-7 body fetches | 5 pages plus up to 2 cross-linked pages | Exhaustive research, expanded queries, title matches |
+| `--depth ultra` | (deprecated alias for `--depth deep`) | | |
 
 Override body fetch count and character limits:
 ```bash
@@ -176,10 +178,10 @@ class TestSomethingNew:
 
 ### Adding a New CLI Flag
 
-1. Add argument to `argparse` in `main()`
+1. Add argument to Click in `src/confluence_retriever/cli.py`
 2. Thread the value through to relevant functions (typically `ConfluenceAdapter` or output functions)
 3. Add tests for the flag parsing and behavior in `tests/test_wiki_answer.py`
-4. Update `confluence-retriever-implementation.md` CLI reference table and README
+4. Update the CLI reference table in README.md
 
 ### Changing CQL Query Logic
 
@@ -232,6 +234,5 @@ Add new dependencies sparingly. Prefer standard library features first.
 
 ## Useful Links
 
-- **Setup Guide:** [confluence-pat-setup.md](../confluence-pat-setup.md) — How to generate a Confluence PAT
-- **Implementation Notes:** [confluence-retriever-implementation.md](../confluence-retriever-implementation.md) — Architecture, phases, and design decisions
+- **PAT Setup:** [docs/setup/confluence-pat-setup.md](../docs/setup/confluence-pat-setup.md) — How to generate a Confluence PAT
 - **README:** [README.md](../README.md) — User-facing feature overview and usage examples

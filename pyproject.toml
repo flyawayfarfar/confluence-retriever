@@ -28,8 +28,6 @@ read = [
 
 [project.scripts]
 confluence-search = "confluence_retriever.cli:main_entry"
-# Legacy console script name; kept for one release.
-wiki-answer = "confluence_retriever.cli:main_entry"
 
 [tool.setuptools.packages.find]
 where = ["src"]

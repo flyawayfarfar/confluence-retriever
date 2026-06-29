@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Install the search-wiki skill for Claude Code, Codex, Gemini, Antigravity, or GitHub Copilot CLI.
+"""Install the search-wiki skill for Claude Code, Codex, Gemini, Antigravity, or GitHub Copilot.
 
 Works on Windows, macOS, and Linux — no shell required.
 
 Usage:
-    python install.py                                # install for Claude Code
+    python install.py                                # install for Claude Code (default)
     python install.py --target codex                 # install for Codex
     python install.py --target gemini                # install for Gemini
     python install.py --target antigravity           # install for Antigravity CLI (agy)
-    python install.py --target copilot               # install for GitHub Copilot CLI
+    python install.py --target copilot               # install for GitHub Copilot
     python install.py --target agents                # install to shared ~/.agents skills
     python install.py --dest /path/to/SKILL.md       # custom destination
     python install.py --command "confluence-search"  # override invocation stamped into skill
@@ -24,10 +24,8 @@ import sys
 from pathlib import Path
 
 SKILL_TEMPLATE = Path(__file__).parent / "skills" / "search-wiki.md"
-SKILL_SUPPORT_FILES = ("evals.md", "memory.md")
+SKILL_SUPPORT_FILES = ("evals.md",)
 
-# Template placeholders.
-PROJECT_ROOT_PLACEHOLDER = "<PROJECT_ROOT>"
 COMMAND_PLACEHOLDER = "{COMMAND}"
 
 
@@ -38,7 +36,6 @@ def skill_dest(target: str) -> Path:
     if target == "gemini":
         return Path.home() / ".gemini" / "skills" / "search-wiki" / "SKILL.md"
     if target == "antigravity":
-        # Antigravity CLI (agy) shares the same skills directory as Gemini
         return Path.home() / ".gemini" / "skills" / "search-wiki" / "SKILL.md"
     if target == "copilot":
         return Path.home() / ".copilot" / "skills" / "search-wiki" / "SKILL.md"
@@ -47,19 +44,19 @@ def skill_dest(target: str) -> Path:
     return Path.home() / ".claude" / "skills" / "search-wiki" / "SKILL.md"
 
 
-def resolve_command(explicit: str | None, project_root: str) -> str:
+def resolve_command(explicit: str | None) -> str:
     """Return the command string to stamp into the skill.
 
     Preference order:
     1. ``--command`` passed on the install.py CLI
     2. ``confluence-search`` on PATH (recommended console script)
-    3. ``python3 <PROJECT_ROOT>/scripts/wiki_answer.py`` (legacy shim)
+    3. ``confluence-search`` as the default fallback
     """
     if explicit:
         return explicit
     if shutil.which("confluence-search"):
         return "confluence-search"
-    return f"python3 {project_root}/scripts/wiki_answer.py"
+    return "confluence-search"
 
 
 def support_file_sources() -> list[Path]:
@@ -86,7 +83,7 @@ def main() -> None:
         type=str,
         default=None,
         help="CLI invocation stamped into the skill (default: auto-detect "
-             "`confluence-search` on PATH, else the legacy script path).",
+             "`confluence-search` on PATH).",
     )
     parser.add_argument("--check", action="store_true", help="Dry run — print result without writing")
     args = parser.parse_args()
@@ -102,12 +99,10 @@ def main() -> None:
             print(f"ERROR: skill support file not found at {path}", file=sys.stderr)
         sys.exit(1)
 
-    project_root = str(Path(__file__).parent.resolve())
-    command = resolve_command(args.command, project_root)
+    command = resolve_command(args.command)
 
     content = (
         SKILL_TEMPLATE.read_text(encoding="utf-8")
-        .replace(PROJECT_ROOT_PLACEHOLDER, project_root)
         .replace(COMMAND_PLACEHOLDER, command)
     )
 
@@ -115,8 +110,7 @@ def main() -> None:
 
     if args.check:
         print(f"Would write to: {dest}\n")
-        print(f"Stamped command: {command}")
-        print(f"Stamped project root: {project_root}\n")
+        print(f"Stamped command: {command}\n")
         print(content)
         for source in support_files:
             print(f"\nWould copy support file: {source.name} -> {dest.parent / source.name}")
@@ -131,7 +125,6 @@ def main() -> None:
     for source in support_files:
         print(f"Installed support file: {dest.parent / source.name}")
     print(f"Stamped command: {command}")
-    print(f"Stamped project root: {project_root}")
 
 
 if __name__ == "__main__":

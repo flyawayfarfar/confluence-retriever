@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-This repository is a small Python CLI for searching Confluence and returning ranked Markdown results. The main entry point is `scripts/wiki_answer.py`, which contains configuration loading, CQL construction, the Confluence API adapter, ranking, and CLI output. Unit tests live in `tests/test_wiki_answer.py` and use mocked HTTP calls only. Assistant skill installation is handled by `install.py`, using the template in `skills/search-wiki.md`. Documentation and setup notes are in `README.md`, `confluence-pat-setup.md`, and `confluence-retriever-implementation.md`. Keep credentials out of source control; `.env.example` is the committed template and local `.env` files are ignored.
+This repository is a Python CLI for searching Confluence and returning ranked Markdown results. The main entry point is the `confluence-search` console script, backed by the `confluence_retriever` package under `src/`. Key modules: `cli.py` (Click entry point), `client.py` (Confluence API adapter), `cql.py` (query builder), `html_utils.py` (HTML parsing and passage extraction), `ranking.py` (scoring and depth defaults), `formatters.py` (Markdown/JSON output). Unit tests live in `tests/` and use mocked HTTP calls only. Assistant skill installation is handled by `install.py`, using the template in `skills/search-wiki.md`. Keep credentials out of source control; `.env.example` is the committed template and local `.env` files are ignored.
 
 ## Build, Test, and Development Commands
 
@@ -11,7 +11,7 @@ Create an environment and install dependencies:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements-dev.txt
+pip install -e .[dev]
 ```
 
 Run the full test suite:
@@ -20,11 +20,11 @@ Run the full test suite:
 pytest
 ```
 
-Run the CLI locally after configuring `.env`:
+Run the CLI locally after configuring credentials:
 
 ```bash
-python3 scripts/wiki_answer.py --query "deployment process" --limit 5
-python3 scripts/wiki_answer.py --query "authentication" --space MT
+confluence-search search --query "deployment process" --limit 5
+confluence-search search --query "authentication" --space MT
 ```
 
 Check the assistant skill installer without writing files:

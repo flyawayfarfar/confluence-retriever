@@ -1,11 +1,8 @@
 # confluence-retriever
 
-![tests](https://github.com/flyawayfarfar/confluence-retriever/actions/workflows/test.yml/badge.svg)
-
 A lightweight Confluence CLI that searches, reads, and explores pages on any
 Confluence instance. Designed as a "dumb retriever" — it fetches, ranks, and
-renders, and your AI assistant (Claude Code, Codex, Gemini, Copilot, etc.)
-synthesises the answer.
+renders, and your AI assistant (GitHub Copilot, etc.) synthesises the answer.
 
 ## How it works
 
@@ -68,7 +65,7 @@ chmod 600 ~/.config/confluence-retriever/.env
 `/rest/api/content/...` automatically. This works for both Cloud and
 Server / Data Center deployments.
 
-For how to generate a PAT, see [confluence-pat-setup.md](confluence-pat-setup.md).
+For how to generate a PAT, see [docs/setup/confluence-pat-setup.md](docs/setup/confluence-pat-setup.md).
 
 ### 3. Verify
 
@@ -85,32 +82,33 @@ This ships a `search-wiki` skill that tells your AI assistant how to invoke
 the CLI. Install it once per assistant:
 
 ```bash
-# Claude Code
-python3 install.py --target claude
+# Claude Code (default)
+python3 install.py
+
+# GitHub Copilot (VS Code or CLI)
+python3 install.py --target copilot
 
 # Gemini CLI
 python3 install.py --target gemini
 
-# GitHub Copilot CLI
-python3 install.py --target copilot
-
-# Shared agent-standard location
-python3 install.py --target agents
+# Antigravity (agy)
+python3 install.py --target antigravity
 
 # Codex
 python3 install.py --target codex
 
-# Custom destination
-python3 install.py --dest /mnt/c/dev/github/claude/global/skills/search-wiki/SKILL.md
+# Shared agent-standard location
+python3 install.py --target agents
 
 # Dry run
 python3 install.py --check
 ```
 
-The installer auto-detects whether `confluence-search` is on `PATH`. If it
-is, the skill is stamped with the short console-script invocation; otherwise
-the skill falls back to `python3 <PROJECT_ROOT>/scripts/wiki_answer.py`.
-Override with `--command` if you want a specific invocation.
+The installer auto-detects `confluence-search` on PATH and stamps it into the
+skill. Override with `--command` if needed.
+
+For the full VS Code Copilot Chat setup (settings, Windows/WSL paths,
+troubleshooting), see [VSCODE_COPILOT_CHAT_SETUP.md](VSCODE_COPILOT_CHAT_SETUP.md).
 
 ## Usage
 
@@ -205,27 +203,13 @@ its canonical page path, the CLI falls back to a page-id lookup URL.
 Deep-mode Markdown also labels appended cross-linked pages with the source
 page title and complete raw source URL.
 
-## Legacy invocation
-
-The pre-0.2 entry point still works for backwards compatibility:
-
-```bash
-python3 scripts/wiki_answer.py --query "deployment"
-```
-
-`scripts/wiki_answer.py` is now a thin shim that delegates to
-`confluence_retriever.cli`. If you previously installed `wiki-answer` as a
-console script, that name also still works.
-
-For the migration map, see [MIGRATION.md](MIGRATION.md).
-
 ## Platform support
 
 | Environment | Works? | Notes |
 |-------------|--------|-------|
 | macOS / Linux | Yes | Native |
-| WSL2 (Windows) | Yes | Required for Claude Code on Windows |
-| Windows PowerShell / CMD | Yes | For Codex, Gemini, or direct use |
+| WSL2 (Windows) | Yes | Native on WSL2 |
+| Windows PowerShell / CMD | Yes | Direct use or GitHub Copilot |
 
 `install.py` is a plain Python script — no bash required, so it works on
 native Windows without WSL.
@@ -252,15 +236,11 @@ confluence-retriever/
 │   ├── ranking.py               # Scoring, query expansion, depth defaults
 │   ├── url_parsing.py           # Extract page ID from URL/ID
 │   └── formatters.py            # Markdown / JSON renderers per subcommand
-├── scripts/
-│   └── wiki_answer.py           # Legacy shim → confluence_retriever.cli
 ├── skills/
-│   └── search-wiki.md           # AI skill template (placeholders for path + command)
+│   └── search-wiki.md           # AI skill template
 ├── tests/                       # pytest suite, no real network calls
 ├── install.py                   # Cross-platform skill installer
 ├── pyproject.toml               # Package + console-script declaration
 ├── requirements.txt
-├── .env.example
-├── MIGRATION.md                 # 0.1 → 0.2 migration map
-└── confluence-pat-setup.md      # PAT generation guide
+└── .env.example
 ```

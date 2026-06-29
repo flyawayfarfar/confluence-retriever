@@ -1,16 +1,35 @@
-"""Unit tests for wiki_answer.py — no real network calls."""
+"""Unit tests for confluence_retriever — no real network calls."""
 
 import json
-import sys
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 import responses as resp_mock
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-import wiki_answer as wiki  # noqa: E402
+import confluence_retriever.config as wiki
+from confluence_retriever.client import ConfluenceAdapter, ConfluenceAuthError, ConfluenceNetworkError
+from confluence_retriever.cli import main_entry as main
+from confluence_retriever.cql import build_cql, cql_escape
+from confluence_retriever.html_utils import (
+    extract_cross_links,
+    extract_headings,
+    extract_relevant_passages,
+    html_to_text,
+    strip_highlight_markers,
+    _proximity_bonus,
+)
+from confluence_retriever.ranking import (
+    DEFAULT_BODY_CHARS,
+    expand_queries,
+    page_url,
+    query_tokens,
+    rank_results,
+    resolve_body_options,
+    score_result,
+    token_in_text,
+    _structural_variants,
+)
 
 
 # ── Config loader ─────────────────────────────────────────────────────────────
@@ -42,34 +61,34 @@ class TestLoadConfig:
 
 class TestCqlEscape:
     def test_plain_text_unchanged(self):
-        assert wiki.cql_escape("hello") == "hello"
+        assert cql_escape("hello") == "hello"
 
     def test_double_quote_escaped(self):
-        assert wiki.cql_escape('say "hi"') == 'say \\"hi\\"'
+        assert cql_escape('say "hi"') == 'say \\"hi\\"'
 
     def test_backslash_escaped_first(self):
-        assert wiki.cql_escape('back\\slash') == 'back\\\\slash'
+        assert cql_escape('back\\slash') == 'back\\\\slash'
 
     def test_backslash_before_quote(self):
-        assert wiki.cql_escape('\\"') == '\\\\\\"'
+        assert cql_escape('\\"') == '\\\\\\"'
 
 
 class TestBuildCql:
     def test_single_query_text_only(self):
         # include_title=False yields the legacy text-only CQL
-        assert wiki.build_cql(["auth"], None, include_title=False) == 'text ~ "auth" AND type = "page"'
+        assert build_cql(["auth"], None, include_title=False) == 'text ~ "auth" AND type = "page"'
 
     def test_single_query_default_searches_title_and_text(self):
         # include_title=True (default) ORs a title clause with the text clause
-        result = wiki.build_cql(["auth"], None)
+        result = build_cql(["auth"], None)
         assert result == '(title ~ "auth" OR text ~ "auth") AND type = "page"'
 
     def test_multiple_queries_text_only(self):
-        result = wiki.build_cql(["auth", "login"], None, include_title=False)
+        result = build_cql(["auth", "login"], None, include_title=False)
         assert result == '(text ~ "auth" OR text ~ "login") AND type = "page"'
 
     def test_multiple_queries_default_includes_title(self):
-        result = wiki.build_cql(["auth", "login"], None)
+        result = build_cql(["auth", "login"], None)
         # title and text clauses for each query, OR'd together
         assert 'title ~ "auth"' in result
         assert 'text ~ "auth"' in result
@@ -78,11 +97,11 @@ class TestBuildCql:
         assert result.endswith('AND type = "page"')
 
     def test_space_filter_appended(self):
-        result = wiki.build_cql(["auth"], "MT", include_title=False)
+        result = build_cql(["auth"], "MT", include_title=False)
         assert result == 'text ~ "auth" AND type = "page" AND space = "MT"'
 
     def test_space_and_multiple_queries(self):
-        result = wiki.build_cql(["auth", "sso"], "IIT", include_title=False)
+        result = build_cql(["auth", "sso"], "IIT", include_title=False)
         assert '(text ~ "auth" OR text ~ "sso")' in result
         assert 'AND type = "page"' in result
         assert 'AND space = "IIT"' in result
@@ -93,63 +112,63 @@ class TestBuildCql:
 class TestStripHighlightMarkers:
     def test_removes_hl_markers(self):
         text = "foo @@@hl@@@bar@@@endhl@@@ baz"
-        assert wiki.strip_highlight_markers(text) == "foo bar baz"
+        assert strip_highlight_markers(text) == "foo bar baz"
 
     def test_no_markers_unchanged(self):
-        assert wiki.strip_highlight_markers("plain text") == "plain text"
+        assert strip_highlight_markers("plain text") == "plain text"
 
     def test_empty_string(self):
-        assert wiki.strip_highlight_markers("") == ""
+        assert strip_highlight_markers("") == ""
 
 
 class TestHtmlToText:
     def test_strips_tags(self):
-        assert wiki.html_to_text("<p>Hello <b>world</b></p>") == "Hello world"
+        assert html_to_text("<p>Hello <b>world</b></p>") == "Hello world"
 
     def test_truncates(self):
         long_html = "<p>" + "a" * 1000 + "</p>"
-        assert len(wiki.html_to_text(long_html, max_chars=100)) == 100
+        assert len(html_to_text(long_html, max_chars=100)) == 100
 
     def test_collapses_whitespace(self):
-        result = wiki.html_to_text("<p>foo   bar</p>")
+        result = html_to_text("<p>foo   bar</p>")
         assert "  " not in result
 
 
 class TestExtractHeadings:
     def test_extracts_h1_h2_h3(self):
         html = "<h1>Title</h1><h2>Section</h2><h3>Sub</h3><h4>Ignored</h4>"
-        assert wiki.extract_headings(html) == ["Title", "Section", "Sub"]
+        assert extract_headings(html) == ["Title", "Section", "Sub"]
 
     def test_empty_html(self):
-        assert wiki.extract_headings("") == []
+        assert extract_headings("") == []
 
     def test_no_headings(self):
-        assert wiki.extract_headings("<p>Just a paragraph</p>") == []
+        assert extract_headings("<p>Just a paragraph</p>") == []
 
 
 class TestExtractCrossLinks:
     def test_extracts_id_with_trailing_slash(self):
         html = '<a href="/pages/12345/Some-Page">link</a>'
-        assert wiki.extract_cross_links(html) == ["12345"]
+        assert extract_cross_links(html) == ["12345"]
 
     def test_extracts_id_without_trailing_slash(self):
         html = '<a href="/pages/12345">link</a>'
-        assert wiki.extract_cross_links(html) == ["12345"]
+        assert extract_cross_links(html) == ["12345"]
 
     def test_extracts_id_from_cloud_wiki_url(self):
         html = '<a href="/wiki/spaces/MT/pages/99999/Title">link</a>'
-        assert wiki.extract_cross_links(html) == ["99999"]
+        assert extract_cross_links(html) == ["99999"]
 
     def test_deduplicates_same_page(self):
         html = '<a href="/pages/42/">a</a><a href="/pages/42/">b</a>'
-        assert wiki.extract_cross_links(html) == ["42"]
+        assert extract_cross_links(html) == ["42"]
 
     def test_ignores_non_page_links(self):
         html = '<a href="/display/MT/overview">link</a>'
-        assert wiki.extract_cross_links(html) == []
+        assert extract_cross_links(html) == []
 
     def test_empty_html(self):
-        assert wiki.extract_cross_links("") == []
+        assert extract_cross_links("") == []
 
 
 class TestExtractRelevantPassages:
@@ -161,7 +180,7 @@ class TestExtractRelevantPassages:
         <p>Release approval requires product signoff and engineering review.</p>
         """
 
-        passages = wiki.extract_relevant_passages(html, ["release approval"], max_chars=500)
+        passages = extract_relevant_passages(html, ["release approval"], max_chars=500)
 
         assert passages[0] == {
             "heading": "Approval Steps",
@@ -171,14 +190,14 @@ class TestExtractRelevantPassages:
     def test_falls_back_to_first_blocks_when_no_match(self):
         html = "<h1>Guide</h1><p>First paragraph.</p><p>Second paragraph.</p>"
 
-        passages = wiki.extract_relevant_passages(html, ["missing"], max_chars=500, max_passages=2)
+        passages = extract_relevant_passages(html, ["missing"], max_chars=500, max_passages=2)
 
         assert [p["text"] for p in passages] == ["First paragraph.", "Second paragraph."]
 
     def test_respects_character_budget(self):
         html = "<p>authentication " + ("details " * 100) + "</p>"
 
-        passages = wiki.extract_relevant_passages(
+        passages = extract_relevant_passages(
             html,
             ["authentication"],
             max_chars=80,
@@ -190,7 +209,7 @@ class TestExtractRelevantPassages:
         assert passages[0]["text"].endswith("...")
 
     def test_returns_plain_text_fallback_for_unstructured_html(self):
-        passages = wiki.extract_relevant_passages("plain authentication text", ["authentication"], max_chars=100)
+        passages = extract_relevant_passages("plain authentication text", ["authentication"], max_chars=100)
 
         assert passages == [{"heading": "", "text": "plain authentication text"}]
 
@@ -199,61 +218,61 @@ class TestExtractRelevantPassages:
 
 class TestQueryTokens:
     def test_splits_phrases_into_unique_tokens(self):
-        assert wiki.query_tokens(["customer API auth", "auth flow"]) == ["customer", "api", "auth", "flow"]
+        assert query_tokens(["customer API auth", "auth flow"]) == ["customer", "api", "auth", "flow"]
 
     def test_ignores_short_tokens(self):
-        assert wiki.query_tokens(["an API in MT"]) == ["api"]
+        assert query_tokens(["an API in MT"]) == ["api"]
 
     def test_short_acronym_does_not_match_inside_word(self):
-        assert not wiki.token_in_text("api", "capital planning")
+        assert not token_in_text("api", "capital planning")
 
     def test_longer_token_can_match_word_variant(self):
-        assert wiki.token_in_text("auth", "authentication guide")
+        assert token_in_text("auth", "authentication guide")
 
 
 class TestPageUrl:
     def test_uses_relative_webui_path(self):
-        assert wiki.page_url(BASE_URL, "42", "/spaces/MT/pages/42/Auth") == (
+        assert page_url(BASE_URL, "42", "/spaces/MT/pages/42/Auth") == (
             f"{BASE_URL}/spaces/MT/pages/42/Auth"
         )
 
     def test_uses_absolute_webui_path(self):
-        assert wiki.page_url(BASE_URL, "42", "https://other.example.com/pages/42") == (
+        assert page_url(BASE_URL, "42", "https://other.example.com/pages/42") == (
             "https://other.example.com/pages/42"
         )
 
     def test_falls_back_to_page_id_lookup_url(self):
-        assert wiki.page_url(BASE_URL, "42") == (
+        assert page_url(BASE_URL, "42") == (
             f"{BASE_URL}/pages/viewpage.action?pageId=42"
         )
 
 
 class TestExpandQueries:
     def test_includes_original_query(self):
-        assert "auth guide" in wiki.expand_queries(["auth guide"])
+        assert "auth guide" in expand_queries(["auth guide"])
 
     def test_structural_drop_trailing_token(self):
-        result = wiki.expand_queries(["auth guide"])
+        result = expand_queries(["auth guide"])
         assert "auth" in result
 
     def test_structural_drop_leading_token(self):
-        result = wiki.expand_queries(["auth guide"])
+        result = expand_queries(["auth guide"])
         assert "guide" in result
 
     def test_abbrev_swap_added_after_structural(self):
-        result = wiki.expand_queries(["auth guide"])
+        result = expand_queries(["auth guide"])
         assert "authentication guide" in result
 
     def test_no_duplicates(self):
-        result = wiki.expand_queries(["auth"])
+        result = expand_queries(["auth"])
         assert len(result) == len(set(r.lower() for r in result))
 
     def test_respects_max_total_cap(self):
-        result = wiki.expand_queries(["authentication config guide"], max_total=3)
+        result = expand_queries(["authentication config guide"], max_total=3)
         assert len(result) <= 3
 
     def test_single_word_query_no_structural_duplicates(self):
-        result = wiki.expand_queries(["authentication"])
+        result = expand_queries(["authentication"])
         assert result.count("authentication") == 1
 
 
@@ -266,35 +285,35 @@ def _make_result(title="", excerpt="", space_key="XX") -> dict:
 class TestScoreResult:
     def test_title_phrase_match_scores_4_plus_token_bonus(self):
         r = _make_result(title="authentication guide")
-        assert wiki.score_result(r, ["authentication"], None) == 6
+        assert score_result(r, ["authentication"], None) == 6
 
     def test_excerpt_phrase_match_scores_2_plus_token_bonus(self):
         r = _make_result(excerpt="how to authenticate users")
-        assert wiki.score_result(r, ["authenticate"], None) == 3
+        assert score_result(r, ["authenticate"], None) == 3
 
     def test_token_match_scores_without_full_phrase(self):
         r = _make_result(title="customer authentication", excerpt="API setup")
-        assert wiki.score_result(r, ["customer API auth"], None) == 5
+        assert score_result(r, ["customer API auth"], None) == 5
 
     def test_space_match_scores_1(self):
         r = _make_result(space_key="MT")
-        assert wiki.score_result(r, ["anything"], "MT") == 1
+        assert score_result(r, ["anything"], "MT") == 1
 
     def test_no_match_scores_0(self):
         r = _make_result(title="unrelated page")
-        assert wiki.score_result(r, ["authentication"], None) == 0
+        assert score_result(r, ["authentication"], None) == 0
 
     def test_case_insensitive(self):
         r = _make_result(title="Authentication Guide")
-        assert wiki.score_result(r, ["authentication"], None) == 6
+        assert score_result(r, ["authentication"], None) == 6
 
     def test_recency_multiplicative_decays_old_pages(self):
         r = {
             **_make_result(title="authentication guide"),
             "last_modified": (datetime.now(timezone.utc) - timedelta(days=30)).isoformat(),
         }
-        no_recency = wiki.score_result(r, ["authentication"], None, enhanced=True)
-        with_recency = wiki.score_result(
+        no_recency = score_result(r, ["authentication"], None, enhanced=True)
+        with_recency = score_result(
             r,
             ["authentication"],
             None,
@@ -314,7 +333,7 @@ class TestScoreResult:
             "last_modified": (datetime.now(timezone.utc) - timedelta(days=3650)).isoformat(),
         }
 
-        ranked = wiki.rank_results(
+        ranked = rank_results(
             [lower_relevance_fresh, higher_relevance_old],
             ["authentication"],
             None,
@@ -336,7 +355,7 @@ class TestScoreResult:
             "last_modified": (datetime.now(timezone.utc) - timedelta(days=365)).isoformat(),
         }
 
-        ranked = wiki.rank_results(
+        ranked = rank_results(
             [old, fresh],
             ["authentication"],
             None,
@@ -351,16 +370,16 @@ class TestRankResults:
     def test_higher_scoring_result_comes_first(self):
         low = _make_result(title="unrelated")
         high = _make_result(title="authentication guide")
-        ranked = wiki.rank_results([low, high], ["authentication"], None)
+        ranked = rank_results([low, high], ["authentication"], None)
         assert ranked[0]["title"] == "authentication guide"
 
     def test_empty_results(self):
-        assert wiki.rank_results([], ["query"], None) == []
+        assert rank_results([], ["query"], None) == []
 
     def test_equal_scores_preserve_relative_order(self):
         a = _make_result(title="a page")
         b = _make_result(title="b page")
-        ranked = wiki.rank_results([a, b], ["something else"], None)
+        ranked = rank_results([a, b], ["something else"], None)
         assert [r["title"] for r in ranked] == ["a page", "b page"]
 
 
@@ -368,25 +387,25 @@ class TestRankResults:
 
 class TestResolveBodyOptions:
     def test_links_depth_fetches_no_bodies(self):
-        assert wiki.resolve_body_options("links", None, None) == (0, 0)
+        assert resolve_body_options("links", None, None) == (0, 0)
 
     def test_skim_depth_fetches_one_default_body(self):
-        assert wiki.resolve_body_options("skim", None, None) == (1, wiki.DEFAULT_BODY_CHARS)
+        assert resolve_body_options("skim", None, None) == (1, DEFAULT_BODY_CHARS)
 
     def test_deep_depth_fetches_five_largest_bodies(self):
         # In v0.2 the `deep` mode took over what `ultra` used to do (5 / 3000).
         # The old 3-page midpoint can still be reached via explicit overrides.
-        assert wiki.resolve_body_options("deep", None, None) == (5, 3000)
+        assert resolve_body_options("deep", None, None) == (5, 3000)
 
     def test_old_deep_preset_reachable_via_explicit_body_options(self):
         # Anyone relying on the pre-v0.2 `deep` defaults can pin them.
-        assert wiki.resolve_body_options("skim", 3, 2000) == (3, 2000)
+        assert resolve_body_options("skim", 3, 2000) == (3, 2000)
 
     def test_explicit_body_options_override_depth_defaults(self):
-        assert wiki.resolve_body_options("deep", 2, 500) == (2, 500)
+        assert resolve_body_options("deep", 2, 500) == (2, 500)
 
     def test_negative_body_options_are_clamped_to_zero(self):
-        assert wiki.resolve_body_options("skim", -1, -10) == (0, 0)
+        assert resolve_body_options("skim", -1, -10) == (0, 0)
 
 
 # ── Confluence adapter ────────────────────────────────────────────────────────
@@ -420,7 +439,7 @@ class TestConfluenceAdapterSearch:
     @resp_mock.activate
     def test_returns_normalised_results(self):
         resp_mock.add(resp_mock.GET, SEARCH_URL, json=MOCK_SEARCH_RESPONSE, status=200)
-        adapter = wiki.ConfluenceAdapter("test-pat", BASE_URL)
+        adapter = ConfluenceAdapter("test-pat", BASE_URL)
         results = adapter.search(["auth"], None, 5)
 
         assert len(results) == 1
@@ -435,28 +454,28 @@ class TestConfluenceAdapterSearch:
     @resp_mock.activate
     def test_raises_auth_error_on_401(self):
         resp_mock.add(resp_mock.GET, SEARCH_URL, status=401)
-        adapter = wiki.ConfluenceAdapter("bad-pat", BASE_URL)
-        with pytest.raises(wiki.ConfluenceAuthError):
+        adapter = ConfluenceAdapter("bad-pat", BASE_URL)
+        with pytest.raises(ConfluenceAuthError):
             adapter.search(["q"], None, 5)
 
     @resp_mock.activate
     def test_raises_auth_error_on_403(self):
         resp_mock.add(resp_mock.GET, SEARCH_URL, status=403)
-        adapter = wiki.ConfluenceAdapter("bad-pat", BASE_URL)
-        with pytest.raises(wiki.ConfluenceAuthError):
+        adapter = ConfluenceAdapter("bad-pat", BASE_URL)
+        with pytest.raises(ConfluenceAuthError):
             adapter.search(["q"], None, 5)
 
     @resp_mock.activate
     def test_empty_results(self):
         resp_mock.add(resp_mock.GET, SEARCH_URL, json={"results": []}, status=200)
-        adapter = wiki.ConfluenceAdapter("test-pat", BASE_URL)
+        adapter = ConfluenceAdapter("test-pat", BASE_URL)
         assert adapter.search(["q"], None, 5) == []
 
     @resp_mock.activate
     def test_raises_network_error_on_429(self):
         resp_mock.add(resp_mock.GET, SEARCH_URL, status=429)
-        adapter = wiki.ConfluenceAdapter("test-pat", BASE_URL)
-        with pytest.raises(wiki.ConfluenceNetworkError):
+        adapter = ConfluenceAdapter("test-pat", BASE_URL)
+        with pytest.raises(ConfluenceNetworkError):
             adapter.search(["q"], None, 5)
 
     @resp_mock.activate
@@ -472,7 +491,7 @@ class TestConfluenceAdapterSearch:
             ]
         }
         resp_mock.add(resp_mock.GET, SEARCH_URL, json=response, status=200)
-        adapter = wiki.ConfluenceAdapter("test-pat", BASE_URL)
+        adapter = ConfluenceAdapter("test-pat", BASE_URL)
 
         result = adapter.search(["auth"], None, 5)[0]
 
@@ -483,7 +502,7 @@ class TestConfluenceAdapterGetPage:
     @resp_mock.activate
     def test_returns_page_with_body(self):
         resp_mock.add(resp_mock.GET, PAGE_URL, json=MOCK_PAGE_RESPONSE, status=200)
-        adapter = wiki.ConfluenceAdapter("test-pat", BASE_URL)
+        adapter = ConfluenceAdapter("test-pat", BASE_URL)
         page = adapter.get_page("42")
 
         assert page is not None
@@ -495,7 +514,7 @@ class TestConfluenceAdapterGetPage:
     def test_returns_url_and_space_name(self):
         """get_page() must include url (from _links.webui) and space_name."""
         resp_mock.add(resp_mock.GET, PAGE_URL, json=MOCK_PAGE_RESPONSE, status=200)
-        adapter = wiki.ConfluenceAdapter("test-pat", BASE_URL)
+        adapter = ConfluenceAdapter("test-pat", BASE_URL)
         page = adapter.get_page("42")
 
         assert page is not None
@@ -506,14 +525,14 @@ class TestConfluenceAdapterGetPage:
     @resp_mock.activate
     def test_returns_none_on_404(self):
         resp_mock.add(resp_mock.GET, PAGE_URL, status=404)
-        adapter = wiki.ConfluenceAdapter("test-pat", BASE_URL)
+        adapter = ConfluenceAdapter("test-pat", BASE_URL)
         assert adapter.get_page("42") is None
 
     @resp_mock.activate
     def test_raises_network_error_on_500(self):
         resp_mock.add(resp_mock.GET, PAGE_URL, status=500)
-        adapter = wiki.ConfluenceAdapter("test-pat", BASE_URL)
-        with pytest.raises(wiki.ConfluenceNetworkError):
+        adapter = ConfluenceAdapter("test-pat", BASE_URL)
+        with pytest.raises(ConfluenceNetworkError):
             adapter.get_page("42")
 
 
@@ -523,16 +542,16 @@ class TestTypedExceptions:
     @resp_mock.activate
     def test_get_page_raises_auth_error_on_401(self):
         resp_mock.add(resp_mock.GET, PAGE_URL, status=401)
-        adapter = wiki.ConfluenceAdapter("bad-pat", BASE_URL)
-        with pytest.raises(wiki.ConfluenceAuthError):
+        adapter = ConfluenceAdapter("bad-pat", BASE_URL)
+        with pytest.raises(ConfluenceAuthError):
             adapter.get_page("42")
 
     @resp_mock.activate
     def test_get_page_raises_network_error_on_connection_refused(self):
         import requests.exceptions
         resp_mock.add(resp_mock.GET, PAGE_URL, body=requests.exceptions.ConnectionError("refused"))
-        adapter = wiki.ConfluenceAdapter("test-pat", BASE_URL)
-        with pytest.raises(wiki.ConfluenceNetworkError):
+        adapter = ConfluenceAdapter("test-pat", BASE_URL)
+        with pytest.raises(ConfluenceNetworkError):
             adapter.get_page("42")
 
     @resp_mock.activate
@@ -542,7 +561,7 @@ class TestTypedExceptions:
         monkeypatch.setattr(wiki, "PROJECT_ENV_FILE", env_file)
         resp_mock.add(resp_mock.GET, SEARCH_URL, status=401)
         with pytest.raises(SystemExit) as exc:
-            wiki.main(["--query", "auth"])
+            main(["--query", "auth"])
         assert exc.value.code == wiki.EXIT_AUTH
 
     @resp_mock.activate
@@ -552,14 +571,14 @@ class TestTypedExceptions:
         monkeypatch.setattr(wiki, "PROJECT_ENV_FILE", env_file)
         resp_mock.add(resp_mock.GET, SEARCH_URL, status=503)
         with pytest.raises(SystemExit) as exc:
-            wiki.main(["--query", "auth"])
+            main(["--query", "auth"])
         assert exc.value.code == wiki.EXIT_NETWORK
 
     @resp_mock.activate
     def test_get_pages_logs_warning_for_failed_pages(self, caplog):
         import logging
         resp_mock.add(resp_mock.GET, PAGE_URL, status=500)
-        adapter = wiki.ConfluenceAdapter("test-pat", BASE_URL)
+        adapter = ConfluenceAdapter("test-pat", BASE_URL)
         with caplog.at_level(logging.WARNING):
             result = adapter.get_pages(["42"])
         assert result == {}
@@ -630,7 +649,7 @@ class TestSearchCombined:
         # text search returns page 42, title search returns page 99
         resp_mock.add(resp_mock.GET, SEARCH_URL, json=TITLE_AND_TEXT_RESPONSE, status=200)
         resp_mock.add(resp_mock.GET, SEARCH_URL, json=TITLE_ONLY_RESPONSE, status=200)
-        adapter = wiki.ConfluenceAdapter("test-pat", BASE_URL)
+        adapter = ConfluenceAdapter("test-pat", BASE_URL)
         results = adapter.search_combined(["auth"], None, 10)
         ids = [r["id"] for r in results]
         assert "42" in ids
@@ -641,7 +660,7 @@ class TestSearchCombined:
         # same page in both text and title search
         resp_mock.add(resp_mock.GET, SEARCH_URL, json=TITLE_AND_TEXT_RESPONSE, status=200)
         resp_mock.add(resp_mock.GET, SEARCH_URL, json=TITLE_AND_TEXT_RESPONSE, status=200)
-        adapter = wiki.ConfluenceAdapter("test-pat", BASE_URL)
+        adapter = ConfluenceAdapter("test-pat", BASE_URL)
         results = adapter.search_combined(["auth"], None, 10)
         page_42 = next(r for r in results if r["id"] == "42")
         assert page_42["_title_hit"] is True
@@ -651,7 +670,7 @@ class TestSearchCombined:
         # text returns 1, title returns 1 different page, limit=1
         resp_mock.add(resp_mock.GET, SEARCH_URL, json=TITLE_AND_TEXT_RESPONSE, status=200)
         resp_mock.add(resp_mock.GET, SEARCH_URL, json=TITLE_ONLY_RESPONSE, status=200)
-        adapter = wiki.ConfluenceAdapter("test-pat", BASE_URL)
+        adapter = ConfluenceAdapter("test-pat", BASE_URL)
         results = adapter.search_combined(["auth"], None, 1)
         assert len(results) <= 1
 
@@ -659,8 +678,8 @@ class TestSearchCombined:
     def test_title_search_auth_error_propagates(self):
         resp_mock.add(resp_mock.GET, SEARCH_URL, json=TITLE_AND_TEXT_RESPONSE, status=200)
         resp_mock.add(resp_mock.GET, SEARCH_URL, status=401)
-        adapter = wiki.ConfluenceAdapter("bad-pat", BASE_URL)
-        with pytest.raises(wiki.ConfluenceAuthError):
+        adapter = ConfluenceAdapter("bad-pat", BASE_URL)
+        with pytest.raises(ConfluenceAuthError):
             adapter.search_combined(["auth"], None, 10)
 
 
@@ -677,7 +696,7 @@ class TestJsonOutput:
         resp_mock.add(resp_mock.GET, SEARCH_URL, json=MOCK_SEARCH_RESPONSE, status=200)
 
         with pytest.raises(SystemExit) as exc:
-            wiki.main(["--query", "auth", "--json"])
+            main(["--query", "auth", "--json"])
         assert exc.value.code == wiki.EXIT_OK
 
         captured = capsys.readouterr()
@@ -697,7 +716,7 @@ class TestJsonOutput:
         resp_mock.add(resp_mock.GET, PAGE_URL, json=MOCK_PAGE_RESPONSE, status=200)
 
         with pytest.raises(SystemExit) as exc:
-            wiki.main(["--query", "auth", "--depth", "skim", "--json"])
+            main(["--query", "auth", "--depth", "skim", "--json"])
         assert exc.value.code == wiki.EXIT_OK
 
         captured = capsys.readouterr()
@@ -716,7 +735,7 @@ class TestJsonOutput:
         resp_mock.add(resp_mock.GET, SEARCH_URL, json=MOCK_SEARCH_RESPONSE, status=200)
 
         with pytest.raises(SystemExit) as exc:
-            wiki.main(["--query", "auth", "--json"])
+            main(["--query", "auth", "--json"])
         assert exc.value.code == wiki.EXIT_OK
 
         captured = capsys.readouterr()
@@ -742,7 +761,7 @@ class TestVerboseLogging:
         resp_mock.add(resp_mock.GET, SEARCH_URL, json=MOCK_SEARCH_RESPONSE, status=200)
 
         with pytest.raises(SystemExit) as exc:
-            wiki.main(["--query", "test", "--verbose"])
+            main(["--query", "test", "--verbose"])
         assert exc.value.code == wiki.EXIT_OK
 
         # Capture stderr where debug logs go
@@ -765,7 +784,7 @@ class TestGetPageUrlAndSpaceName:
             "body": {"storage": {"value": "<p>Steps here</p>"}},
         }
         resp_mock.add(resp_mock.GET, f"{BASE_URL}/rest/api/content/99", json=page_response, status=200)
-        adapter = wiki.ConfluenceAdapter("test-pat", BASE_URL)
+        adapter = ConfluenceAdapter("test-pat", BASE_URL)
         page = adapter.get_page("99")
 
         assert page is not None
@@ -775,7 +794,7 @@ class TestGetPageUrlAndSpaceName:
     def test_from_page_tracks_source(self):
         """_structural_variants drops trailing and leading tokens, and extracts longest."""
         # Smoke-test that _structural_variants returns useful coverage variants
-        variants = wiki._structural_variants("deploy authentication service")
+        variants = _structural_variants("deploy authentication service")
         assert "deploy authentication" in variants
         assert "authentication service" in variants
 
@@ -792,7 +811,7 @@ class TestGetPageUrlAndSpaceName:
             resp_mock.GET, f"{BASE_URL}/rest/api/content/77",
             json=page_response_no_links, status=200,
         )
-        adapter = wiki.ConfluenceAdapter("test-pat", BASE_URL)
+        adapter = ConfluenceAdapter("test-pat", BASE_URL)
         page = adapter.get_page("77")
 
         assert page is not None
@@ -816,7 +835,7 @@ class TestUltraDepthE2E:
         resp_mock.add(resp_mock.GET, PAGE_URL, json=MOCK_PAGE_RESPONSE, status=200)
 
         with pytest.raises(SystemExit) as exc:
-            wiki.main(["--query", "auth", "--depth", "ultra", "--json"])
+            main(["--query", "auth", "--depth", "ultra", "--json"])
         assert exc.value.code == wiki.EXIT_OK
 
         captured = capsys.readouterr()
@@ -843,7 +862,7 @@ class TestUltraDepthE2E:
         resp_mock.add(resp_mock.GET, PAGE_URL, json=MOCK_PAGE_RESPONSE, status=200)
 
         with pytest.raises(SystemExit) as exc:
-            wiki.main(["--query", "auth", "--depth", "ultra", "--json"])
+            main(["--query", "auth", "--depth", "ultra", "--json"])
         assert exc.value.code == wiki.EXIT_OK
 
         captured = capsys.readouterr()
@@ -889,7 +908,7 @@ class TestUltraDepthE2E:
         resp_mock.add(resp_mock.GET, f"{BASE_URL}/rest/api/content/99", json=linked_page, status=200)
 
         with pytest.raises(SystemExit) as exc:
-            wiki.main(["--query", "auth", "--depth", "ultra", "--json"])
+            main(["--query", "auth", "--depth", "ultra", "--json"])
         assert exc.value.code == wiki.EXIT_OK
 
         output = json.loads(capsys.readouterr().out)
@@ -926,7 +945,7 @@ class TestUltraDepthE2E:
         resp_mock.add(resp_mock.GET, f"{BASE_URL}/rest/api/content/99", json=linked_page, status=200)
 
         with pytest.raises(SystemExit) as exc:
-            wiki.main(["--query", "auth", "--depth", "ultra"])
+            main(["--query", "auth", "--depth", "ultra"])
         assert exc.value.code == wiki.EXIT_OK
 
         output = capsys.readouterr().out

@@ -6,13 +6,11 @@ origin: local
 
 # Search Wiki (Confluence)
 
-Use the `confluence-search` console script (or, for legacy installs, the
-`wiki_answer.py` shim) to fetch ranked Confluence results, then synthesize
-a direct answer.
+Use the `confluence-search` console script to fetch ranked Confluence results,
+then synthesize a direct answer.
 
-Load `memory.md` before synthesizing a substantive answer when that file is
-available. Use `evals.md` as the final grounding check. Skip the eval loop for
-simple requests that only ask for a page link.
+Use `evals.md` as the final grounding check. Skip the eval loop for simple
+requests that only ask for a page link.
 
 ## When to Activate
 
@@ -27,9 +25,8 @@ simple requests that only ask for a page link.
 {COMMAND}
 ```
 
-Recommended install: `pip install <PROJECT_ROOT>` exposes the
-`confluence-search` console script. The legacy `python3
-<PROJECT_ROOT>/scripts/wiki_answer.py` invocation still works as a shim.
+Recommended install: `pip install .` exposes the `confluence-search` console
+script.
 
 ## How to Use
 

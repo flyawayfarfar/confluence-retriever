@@ -1,30 +1,40 @@
 # Confluence Retriever Project Instructions
 
-This project provides a CLI tool (`scripts/wiki_answer.py`) to search and retrieve content from Confluence.
+This project provides a CLI tool (`confluence-search`) to search and retrieve content from Confluence.
 
 ## Key Components
 
-- **Retrieval Script:** `scripts/wiki_answer.py` - Queries Confluence CQL and returns ranked results.
-- **Skills:** The `search-wiki` skill (located in `skills/search-wiki.md`) allows an AI assistant to use this tool.
-- **Setup:** See `GEMINI_SETUP.md` for installation instructions.
+- **CLI:** `confluence-search` console script (package `confluence_retriever` under `src/`) — queries Confluence CQL and returns ranked results.
+- **Skills:** The `search-wiki` skill (in `skills/search-wiki.md`) tells an AI assistant how to invoke the CLI.
+- **Setup:** Run `confluence-search setup` interactively, or see `docs/setup/confluence-pat-setup.md`.
 
 ## Developer Workflows
 
 ### Running Tests
-Use `pytest` to run the test suite. Tests are located in the `tests/` directory and use mocks for network calls.
+```bash
+pytest
+```
+Tests are in `tests/` and mock all HTTP calls — no real Confluence needed.
 
 ### Using the Search Tool
-You can run the script directly:
 ```bash
-python3 scripts/wiki_answer.py --query "your search term"
+confluence-search search --query "your search term"
+confluence-search search --query "auth" --space MT --depth skim
+confluence-search doctor    # verify config + connectivity
 ```
 
 ### Depth Modes
-- `links`: (Default) Returns titles, URLs, and excerpts.
-- `skim`: Fetches the body of the top result.
-- `deep`: Fetches the bodies of the top 3 results.
+- `links` (default): Returns titles, URLs, and excerpts (1 API call).
+- `skim`: Fetches query-relevant passages from the top page (2 API calls).
+- `deep`: Expanded query variants, 5 page bodies, and cross-links (7-9 API calls).
+
+### Installing the Skill
+```bash
+python3 install.py --target gemini    # writes to ~/.gemini/skills/search-wiki/SKILL.md
+python3 install.py --check            # dry run
+```
 
 ## Conventions
 - Follow PEP 8 for Python code.
 - Use `responses` for mocking HTTP requests in tests.
-- Keep credentials in `.env` (not committed).
+- Keep credentials in `~/.config/confluence-retriever/.env` (not committed).

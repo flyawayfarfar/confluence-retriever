@@ -59,8 +59,6 @@ confluence-search children 12345
 confluence-search doctor
 ```
 
-The legacy `python3 scripts/wiki_answer.py …` invocation still works via a shim.
-
 ### Skill Installer Testing
 
 ```bash
@@ -72,6 +70,8 @@ python3 install.py --target claude
 
 # Install to other assistants
 python3 install.py --target gemini
+python3 install.py --target antigravity
+python3 install.py --target codex
 python3 install.py --target copilot
 python3 install.py --target agents
 ```
@@ -81,8 +81,8 @@ python3 install.py --target agents
 **confluence-retriever** is a "dumb retriever, smart host" design:
 
 - **CLI (`confluence-search` console script, package `confluence_retriever`)** — handles config loading, CQL building, Confluence REST API calls, HTML parsing, ranking, and output formatting across `search`, `read`, `info`, `children`, `setup`, and `doctor` subcommands
-- **Host AI** — Claude Code / Copilot / Codex / Gemini / etc. invokes the CLI and synthesises answers from the structured output
-- **Skill (`skills/search-wiki.md`)** — Template instructions for the host AI; `install.py` stamps both the project root and the resolved command name into it
+- **Host AI** — Claude Code / Copilot / Codex / Gemini / Antigravity / etc. invokes the CLI and synthesises answers from the structured output
+- **Skill (`skills/search-wiki.md`)** — Template instructions for the host AI; `install.py` stamps the resolved command name into it
 
 The CLI returns deterministic ranked Markdown (or JSON) with no AI logic, making it compatible with any host and shell/IDE/agent.
 
@@ -101,20 +101,16 @@ src/confluence_retriever/        # Python package
 ├── url_parsing.py               # extract_page_id (URL/ID → numeric ID)
 └── formatters.py                # Markdown / JSON renderers per subcommand
 
-scripts/wiki_answer.py           # Legacy shim — re-exports the package surface
-                                 # so `import wiki_answer as wiki` keeps working
-
-tests/                           # 156 unit tests, all HTTP mocked
+tests/                           # 151 unit tests, all HTTP mocked
 ├── test_wiki_answer.py          # Search, ranking, config, depth, ultra E2E
 ├── test_scorer_invariants.py    # Recency must not invert relevance order, etc.
 ├── test_url_parsing.py          # All four URL shapes + bare ID + bad input
 ├── test_html_to_markdown.py     # markdownify path + fallback
 ├── test_cli_subcommands.py      # read, info, children, setup, doctor via Click
-└── test_install.py              # Skill installer: paths, command resolution
+├── test_install.py              # Skill installer: paths, command resolution
+└── conftest.py                  # autouse fixture: isolate .env from real credentials
 
-install.py                       # Cross-platform skill installer
-                                 # Placeholders: <PROJECT_ROOT> and {COMMAND}
-
+install.py                       # Cross-platform skill installer ({COMMAND} placeholder)
 skills/search-wiki.md            # AI skill template
 pyproject.toml                   # Declares `confluence-search` console script
 requirements.txt                 # Runtime deps: requests, bs4, python-dotenv, click
@@ -153,22 +149,22 @@ requirements-dev.txt             # +pytest, responses, markdownify
 
 `--depth ultra` is a deprecated alias for `--depth deep`. The pre-0.2
 3-page `deep` preset has been removed; pin `--depth skim --body-top 3
---body-chars 2000` to recover that exact midpoint. See [MIGRATION.md](MIGRATION.md).
+--body-chars 2000` to recover that exact midpoint.
 
 ## Common Development Tasks
 
 ### Adding a CLI Flag
 
-1. Add argument to `argparse` in `main()`
+1. Add argument to Click in `src/confluence_retriever/cli.py`
 2. Thread the value through to relevant functions (typically `ConfluenceAdapter` or output)
 3. Add tests in `tests/test_wiki_answer.py`
-4. Update CLI reference table in README.md and `confluence-retriever-implementation.md`
+4. Update CLI reference table in README.md
 
 ### Modifying CQL or Ranking
 
 1. Edit `build_cql()`, `cql_escape()`, `score_result()`, or `rank_results()`
 2. Add/update tests in `tests/test_wiki_answer.py` with edge cases (quotes, backslashes, special chars)
-3. Test end-to-end: `python3 scripts/wiki_answer.py --query "test query"`
+3. Test end-to-end: `confluence-search search --query "test query"`
 
 ### Changing HTML Parsing
 
@@ -181,8 +177,8 @@ requirements-dev.txt             # +pytest, responses, markdownify
 
 The installer is cross-platform:
 - Reads `skills/search-wiki.md` template
-- Substitutes absolute path to `wiki_answer.py` 
-- Writes to target location (Claude Code, Copilot, Codex, Gemini, or custom path)
+- Stamps `confluence-search` (auto-detected on PATH) into the `{COMMAND}` placeholder
+- Writes to target location (Claude Code, Copilot, Codex, Gemini, Antigravity, or custom path)
 - Maintains Windows/macOS/Linux/WSL2 compatibility
 
 ## Testing Practices
@@ -197,7 +193,7 @@ When adding features, write tests first (RED), then implement (GREEN), then veri
 
 ## Key Design Decisions
 
-- **Single file CLI** — all logic in `wiki_answer.py` reduces deployment complexity and keeps skill installer simple
+- **Package-based CLI** — logic split into focused modules under `src/confluence_retriever/`; `confluence-search` console script is the single entry point
 - **No AI in CLI** — ranking is keyword-based, output is deterministic markdown; AI reasoning lives in the host
 - **Mocked HTTP** — tests use `responses` library for speed and determinism; no real Confluence calls in test suite
 - **XDG config path** — `.env` lookup checks `~/.config/confluence-retriever/` first, following standard conventions
@@ -214,7 +210,6 @@ When adding features, write tests first (RED), then implement (GREEN), then veri
 ## References
 
 - **User Guide:** [README.md](README.md) — Features, setup, CLI flags, platform support
-- **Setup Guide:** [confluence-pat-setup.md](confluence-pat-setup.md) — How to generate a Confluence PAT
-- **Implementation Notes:** [confluence-retriever-implementation.md](confluence-retriever-implementation.md) — Architecture, phases, ranking algorithm
+- **PAT Setup:** [docs/setup/confluence-pat-setup.md](docs/setup/confluence-pat-setup.md) — How to generate a Confluence PAT
 - **Copilot Instructions:** [.github/copilot-instructions.md](.github/copilot-instructions.md) — Detailed structure and testing guidelines
 - **Repository Guidelines:** [AGENTS.md](AGENTS.md) — Build/test commands, coding style, common tasks
